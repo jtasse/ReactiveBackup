@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
 $backupSucceeded = $false
 $backupRoot = $null
+$isBatchMode = $false
 
 # -------------------------------
 # Centralized Solution Logging
@@ -45,11 +46,30 @@ try {
     # -------------------------------
     # Load configuration
     # -------------------------------
-    $configPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
-    $config     = (Get-Content $configPath -Raw -Encoding UTF8) | ConvertFrom-Json
+    $defaultConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
+    $actualConfigPath  = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
 
-    # Use param if provided, otherwise config, otherwise default
+    # Load default config first
+    $config = (Get-Content $defaultConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+
+    # Initialize LogLevel from default config if not provided (for potential error logging)
     if (-not $LogLevel) { $LogLevel = $config.logLevel }
+
+    if (Test-Path $actualConfigPath) {
+        try {
+            $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
+                throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
+            }
+            $config = $actualConfig
+            # Update LogLevel from actual config if not provided as param
+            if (-not $PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel = $config.logLevel }
+        }
+        catch {
+            Write-SolutionLog "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
+        }
+    }
+
     if (-not $LogLevel) { $LogLevel = "error" }
 
     # -------------------------------
@@ -57,7 +77,7 @@ try {
     # -------------------------------
     if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
         Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
-        $repoName = "All Repositories"
+        $isBatchMode = $true
         
         $rootSrc = $config.rootCodeDirectory
         $rootDest = $config.rootBackupDirectory
@@ -138,7 +158,7 @@ try {
         -replace '\\', '-'
 
     $backupRoot = Join-Path $DestinationDirectory $timestamp
-    New-Item -ItemType Directory -Path $backupRoot | Out-Null
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
 
     # -------------------------------
     # Create backup subfolders
@@ -146,8 +166,8 @@ try {
     $codeBackupPath = Join-Path $backupRoot 'code'
     $dataBackupPath = Join-Path $backupRoot 'backup data'
 
-    New-Item -ItemType Directory -Path $codeBackupPath | Out-Null
-    New-Item -ItemType Directory -Path $dataBackupPath | Out-Null
+    New-Item -ItemType Directory -Path $codeBackupPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $dataBackupPath -Force | Out-Null
 
     # -------------------------------
     # Per-Backup Log Helper
@@ -198,14 +218,14 @@ try {
             $filesToBackup = Get-ChildItem -Path $SourceDirectory -Recurse -File
         }
 
-        $allFiles = $filesToBackup | ForEach-Object {
+        $allFiles = @($filesToBackup | ForEach-Object {
             $repoBackupCount++
             if ($repoBackupCount % 10 -eq 0) {
                 $prepSpinIdx = ($prepSpinIdx + 1) % 4
                 Write-Host -NoNewline "`r$($spinner[$prepSpinIdx]) $prepareMsg"
             }
             $_
-        }
+        })
     }
     catch {
         Write-Host "`r$prepareMsg - Failed" -ForegroundColor Red
@@ -308,10 +328,21 @@ catch {
 }
 finally {
     if ($backupSucceeded) {
-        Write-Host "$repoName backup successful" -ForegroundColor Green
+        if ($isBatchMode) {
+            ""
+            Write-Host "Repository backups completed"
+        }
+        else {
+            Write-Host "$repoName backup successful" -ForegroundColor Green
+        }
     }
     else {
-        Write-Host "One or more errors occurred while backing up $repoName - check logs in ReactiveBackup solution folder" -ForegroundColor Red
+        if ($isBatchMode) {
+            Write-Host "Repository backups completed with errors - check logs in ReactiveBackup solution folder" -ForegroundColor Red
+        }
+        else {
+            Write-Host "One or more errors occurred while backing up $repoName - check logs in ReactiveBackup solution folder" -ForegroundColor Red
+        }
     }
 }
 

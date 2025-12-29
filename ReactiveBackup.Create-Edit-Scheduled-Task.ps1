@@ -17,8 +17,22 @@ try {
     # -------------------------------
     # Load configuration
     # -------------------------------
-    $configPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
-    $config     = (Get-Content $configPath -Raw -Encoding UTF8) | ConvertFrom-Json
+    $defaultConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
+    $actualConfigPath  = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
+
+    # Load default config first
+    $config = (Get-Content $defaultConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+
+    if (Test-Path $actualConfigPath) {
+        try {
+            $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            if (-not $actualConfig.checkForCodeChangesIntervalMinutes) { throw "Missing required key: checkForCodeChangesIntervalMinutes" }
+            $config = $actualConfig
+        }
+        catch {
+            Write-ErrorLog "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config."
+        }
+    }
 
     if (-not $config.PSObject.Properties.Name -contains 'checkForCodeChangesIntervalMinutes') {
         throw "Missing required config value: checkForCodeChangesIntervalMinutes"
@@ -53,7 +67,7 @@ try {
     else {
         $choice = Read-Host "No scheduled task named '$taskName' found. Create it? (Y/N)"
         if ($choice.ToUpper() -eq 'Y') {
-            $scriptPath = Join-Path $PSScriptRoot 'ReactiveBackup.CheckAndRun.ps1'
+            $scriptPath = Join-Path $PSScriptRoot 'ReactiveBackup.EvaluateAndRun.ps1'
 
             # Trigger: start 1 min from now, repeat every X minutes, duration 1 year
             $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
