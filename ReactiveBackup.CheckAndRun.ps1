@@ -3,16 +3,27 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Write-Log {
-    param([string]$Message)
+    param(
+        [string]$Message,
+        [string]$Level = "Info"
+    )
 
-    $logDir = Join-Path $PSScriptRoot 'logs'
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Path $logDir | Out-Null
+    # Filter based on configured log level
+    # 'error' level: only show Error
+    # 'info' level: show Info and Error
+    $shouldLog = $false
+    if ($config.logLevel -eq 'info') { $shouldLog = $true }
+    elseif ($config.logLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
+
+    if ($shouldLog) {
+        $logDir = Join-Path $PSScriptRoot 'logs'
+        if (-not (Test-Path $logDir)) {
+            New-Item -ItemType Directory -Path $logDir | Out-Null
+        }
+        $logPath = Join-Path $logDir "ReactiveBackup.log"
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
     }
-
-    $logPath = Join-Path $logDir "ReactiveBackup.log"
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content -Path $logPath -Value "[$timestamp] $Message"
 }
 
 # --- Load config ---
@@ -25,6 +36,7 @@ $config = Get-Content $configPath | ConvertFrom-Json
 
 $rootCodeDirectory   = $config.rootCodeDirectory
 $rootBackupDirectory = $config.rootBackupDirectory
+$logLevel            = $config.logLevel
 $backupLevel         = $config.backupLevel
 $includeRootFiles    = $config.includeRootFiles
 $excludedSubdirs     = $config.excludedSubdirectories
@@ -35,6 +47,11 @@ $backupDirName = Split-Path $rootBackupDirectory -Leaf
 if ($backupDirName -and $excludedSubdirs -notcontains $backupDirName) {
     $excludedSubdirs += $backupDirName
 }
+
+# Default log level if missing
+if (-not $logLevel) { $logLevel = "error" }
+# Ensure config object has it for Write-Log to use
+if (-not $config.PSObject.Properties.Name -contains 'logLevel') { $config | Add-Member -MemberType NoteProperty -Name 'logLevel' -Value $logLevel }
 
 # --- Get last backup time ---
 function Get-LastBackupTime {
@@ -161,7 +178,7 @@ foreach ($repo in $reposToCheck) {
         Write-Host "" # Newline after spinner
     } catch {
         Write-Host "" # Newline after error
-        Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)"
+        Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)" -Level Error
         Write-Host "Error scanning repo $repoName : $($_.Exception.Message)" -ForegroundColor Red
         continue
     }
@@ -188,11 +205,11 @@ foreach ($repo in $reposToCheck) {
 
     if ($shouldBackup) {
         Write-Host "Running backup for $repoName..."
-        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -ExcludedSubdirectories $excludedSubdirs -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat
+        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -ExcludedSubdirectories $excludedSubdirs -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel
         if ($LASTEXITCODE -eq 0) {
             Write-Log "  $repoName backup successful."
         } else {
-            Write-Log "  $repoName backup failed."
+            Write-Log "  $repoName backup failed." -Level Error
         }
     }
 }

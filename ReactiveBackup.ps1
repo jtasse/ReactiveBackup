@@ -7,7 +7,8 @@ param(
     [string]$DestinationDirectory,
     [string[]]$ExcludedSubdirectories,
     [bool]$IncludeRootFiles,
-    [string]$TimestampFormat
+    [string]$TimestampFormat,
+    [string]$LogLevel
 )
 
 Set-StrictMode -Version Latest
@@ -18,20 +19,25 @@ $backupSucceeded = $false
 $backupRoot = $null
 
 # -------------------------------
-# Error-only logging (centralized)
+# Centralized Solution Logging
 # -------------------------------
-function Write-ErrorLog {
-    param ([string]$Message)
+function Write-SolutionLog {
+    param (
+        [string]$Message,
+        [string]$Level = "Info"
+    )
 
-    $logDir = Join-Path $PSScriptRoot 'logs'
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Path $logDir | Out-Null
+    $shouldLog = $false
+    if ($LogLevel -eq 'info') { $shouldLog = $true }
+    elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
+
+    if ($shouldLog) {
+        $logDir = Join-Path $PSScriptRoot 'logs'
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+        $logPath = Join-Path $logDir "ReactiveBackup.log"
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
     }
-
-    $logPath = Join-Path $logDir "$scriptName.errors.log"
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-
-    Add-Content -Path $logPath -Value "[$timestamp] $Message"
 }
 
 try {
@@ -40,6 +46,10 @@ try {
     # -------------------------------
     $configPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
     $config     = (Get-Content $configPath -Raw -Encoding UTF8) | ConvertFrom-Json
+
+    # Use param if provided, otherwise config, otherwise default
+    if (-not $LogLevel) { $LogLevel = $config.logLevel }
+    if (-not $LogLevel) { $LogLevel = "error" }
 
     # -------------------------------
     # Handle 'repo-parent' mode (Batch Mode)
@@ -73,7 +83,7 @@ try {
             }
 
             $repoDest = Join-Path $rootDest $repo.Name
-            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -ExcludedSubdirectories $excl -IncludeRootFiles $incRoot -TimestampFormat $fmt
+            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -ExcludedSubdirectories $excl -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
         }
 
@@ -127,39 +137,58 @@ try {
     New-Item -ItemType Directory -Path $dataBackupPath | Out-Null
 
     # -------------------------------
-    # Backup log (per-backup)
+    # Per-Backup Log Helper
     # -------------------------------
     $backupLogPath = Join-Path $dataBackupPath 'backup.log'
-    Add-Content $backupLogPath "Backup started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    Add-Content $backupLogPath "Source: $SourceDirectory"
+    
+    function Write-BackupLog {
+        param (
+            [string]$Message,
+            [string]$Level = "Info"
+        )
+        $shouldLog = $false
+        if ($LogLevel -eq 'info') { $shouldLog = $true }
+        elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
+
+        if ($shouldLog) { Add-Content $backupLogPath $Message }
+    }
+
+    Write-BackupLog "Backup started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    Write-BackupLog "Source: $SourceDirectory"
 
     # -------------------------------
-    # Copy files with exclusions
+    # Gather files
     # -------------------------------
     $spinner = @('|', '/', '-', '\')
-    $scanSpinIdx = 0
-    $scanCount = 0
-    $scanMsg = "Scanning for changes to files in $SourceDirectory..."
+    $prepSpinIdx = 0
+    $repoBackupCount = 0
+    $prepareMsg = "Preparing to back up files in $SourceDirectory..."
     "" # write blank line
-    Write-Host -NoNewline "$($spinner[0]) $scanMsg"
+    Write-Host -NoNewline "$($spinner[0]) $prepareMsg"
 
-    $allFiles = Get-ChildItem -Path $SourceDirectory -Recurse -File | ForEach-Object {
-        $scanCount++
-        if ($scanCount % 10 -eq 0) {
-            $scanSpinIdx = ($scanSpinIdx + 1) % 4
-            Write-Host -NoNewline "`r$($spinner[$scanSpinIdx]) $scanMsg"
+    try {
+        $allFiles = Get-ChildItem -Path $SourceDirectory -Recurse -File | ForEach-Object {
+            $repoBackupCount++
+            if ($repoBackupCount % 10 -eq 0) {
+                $prepSpinIdx = ($prepSpinIdx + 1) % 4
+                Write-Host -NoNewline "`r$($spinner[$prepSpinIdx]) $prepareMsg"
+            }
+            $_
         }
-        $_
     }
-    Write-Host "`r$scanMsg  "
-
+    catch {
+        Write-Host "`r$prepareMsg - Failed" -ForegroundColor Red
+        Write-SolutionLog "Error preparing backup for $SourceDirectory : $($_.Exception.Message)" -Level Error
+        exit 1
+    }
+    Write-Host "`r$prepareMsg - Found $($allFiles.Count) files."
     $anyFileError = $false
     
     # Progress spinner setup
     $spinnerIndex = 0
     $fileCounter = 0
     
-    $progressMsg = "Backing up files in folders under $SourceDirectory..."
+    $progressMsg = "Backing up files in $SourceDirectory..."
     Write-Host -NoNewline "$($spinner[0]) $progressMsg"
 
     foreach ($file in $allFiles) {
@@ -211,7 +240,8 @@ try {
                 $errorMsg = "Path too long ($($targetFile.Length) chars). Windows limit is 260. Original Error: $errorMsg"
             }
             
-            Add-Content $backupLogPath "ERROR copying file '$($file.FullName)': $errorMsg"
+            Write-BackupLog "ERROR copying file '$($file.FullName)': $errorMsg" -Level Error
+            Write-SolutionLog "ERROR copying file '$($file.FullName)': $errorMsg" -Level Error
             # Print error on new line, then restore spinner prompt
             # Clear line first to ensure clean error display
             Write-Host "`r$(' ' * ($progressMsg.Length + 5))" -NoNewline
@@ -221,18 +251,19 @@ try {
     }
 
     # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
-    Write-Host "`r$progressMsg  "
+    Write-Host "`r$progressMsg - Completed.  "
 
     if (-not $anyFileError) {
-        Add-Content $backupLogPath "$repoName Backup completed successfully."
+        Write-BackupLog "$repoName Backup completed successfully."
         $backupSucceeded = $true
     } else {
-        Add-Content $backupLogPath "Backup completed with errors (see above)."
+        Write-BackupLog "Backup completed with errors (see above)." -Level Error
         # We leave $backupSucceeded as false so the script exits with 1 to indicate partial failure
     }
 }
 catch {
-    Write-ErrorLog $_.Exception.ToString()
+    Write-Host ""
+    Write-SolutionLog $_.Exception.ToString() -Level Error
 
     if ($backupRoot -and (Test-Path $backupRoot)) {
         $errorPath = "$backupRoot - BACKUP ERROR"
