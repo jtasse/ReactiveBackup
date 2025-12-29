@@ -5,7 +5,8 @@
 param(
     [string]$SourceDirectory,
     [string]$DestinationDirectory,
-    [string[]]$ExcludedSubdirectories,
+    [string[]]$IncludedRepoSubfolders,
+    [string[]]$ExcludedRepoSubfolders,
     [bool]$IncludeRootFiles,
     [string]$TimestampFormat,
     [string]$LogLevel
@@ -60,17 +61,28 @@ try {
         
         $rootSrc = $config.rootCodeDirectory
         $rootDest = $config.rootBackupDirectory
-        $excl = $config.excludedSubdirectories
+        $inclFolders = $config.includedRepoFolders
+        $exclFolders = $config.excludedRepoFolders
+        $inclSub = $config.includedRepoSubfolders
+        $exclSub = $config.excludedRepoSubfolders
         $incRoot = [bool]$config.includeRootFiles
         $fmt = $config.timestampFormat
 
         # Ensure backup dir is excluded
         $backupDirName = Split-Path $rootDest.TrimEnd('\', '/') -Leaf
-        if ($backupDirName -and $excl -notcontains $backupDirName) {
-            $excl += $backupDirName
+        if ($backupDirName -and $exclSub -notcontains $backupDirName -and (-not $inclSub -or $inclSub.Count -eq 0)) {
+            $exclSub += $backupDirName
         }
 
-        $repos = Get-ChildItem -Path $rootSrc -Directory
+        $allRepos = Get-ChildItem -Path $rootSrc -Directory
+        $repos = @()
+
+        if ($inclFolders -and $inclFolders.Count -gt 0) {
+            $repos = $allRepos | Where-Object { $inclFolders -contains $_.Name }
+        } else {
+            $repos = $allRepos | Where-Object { $exclFolders -notcontains $_.Name }
+        }
+        
         $anyFailure = $false
 
         foreach ($repo in $repos) {
@@ -83,7 +95,7 @@ try {
             }
 
             $repoDest = Join-Path $rootDest $repo.Name
-            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -ExcludedSubdirectories $excl -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel
+            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
         }
 
@@ -94,7 +106,8 @@ try {
     # Use params if provided, otherwise fall back to config
     if (-not $SourceDirectory) { $SourceDirectory = $config.rootCodeDirectory }
     if (-not $DestinationDirectory) { $DestinationDirectory = $config.rootBackupDirectory }
-    if (-not $ExcludedSubdirectories) { $ExcludedSubdirectories = $config.excludedSubdirectories }
+    if (-not $IncludedRepoSubfolders) { $IncludedRepoSubfolders = $config.includedRepoSubfolders }
+    if (-not $ExcludedRepoSubfolders) { $ExcludedRepoSubfolders = $config.excludedRepoSubfolders }
     if (-not $TimestampFormat) { $TimestampFormat = $config.timestampFormat }
     # Handle boolean explicitly to avoid null issues
     if (-not $PSBoundParameters.ContainsKey('IncludeRootFiles')) { 
@@ -167,7 +180,25 @@ try {
     Write-Host -NoNewline "$($spinner[0]) $prepareMsg"
 
     try {
-        $allFiles = Get-ChildItem -Path $SourceDirectory -Recurse -File | ForEach-Object {
+        $filesToBackup = @()
+        
+        if ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0) {
+            # --- INCLUSION MODE ---
+            if ($IncludeRootFiles) {
+                $filesToBackup += Get-ChildItem -Path $SourceDirectory -File -ErrorAction SilentlyContinue
+            }
+            foreach ($sub in $IncludedRepoSubfolders) {
+                $subPath = Join-Path $SourceDirectory $sub
+                if (Test-Path $subPath) {
+                    $filesToBackup += Get-ChildItem -Path $subPath -Recurse -File -ErrorAction SilentlyContinue
+                }
+            }
+        } else {
+            # --- EXCLUSION / DEFAULT MODE ---
+            $filesToBackup = Get-ChildItem -Path $SourceDirectory -Recurse -File
+        }
+
+        $allFiles = $filesToBackup | ForEach-Object {
             $repoBackupCount++
             if ($repoBackupCount % 10 -eq 0) {
                 $prepSpinIdx = ($prepSpinIdx + 1) % 4
@@ -181,7 +212,7 @@ try {
         Write-SolutionLog "Error preparing backup for $SourceDirectory : $($_.Exception.Message)" -Level Error
         exit 1
     }
-    Write-Host "`r$prepareMsg - Found $($allFiles.Count) files."
+    Write-Host "`r$prepareMsg Found $($allFiles.Count) files."
     $anyFileError = $false
     
     # Progress spinner setup
@@ -204,21 +235,24 @@ try {
         try {
             $relPath = $file.FullName.Substring($SourceDirectory.Length).TrimStart('\', '/')
             
-            # Check exclusions
-            $shouldExclude = $false
-            foreach ($ex in $ExcludedSubdirectories) {
-                $pattern = [regex]::Escape($ex)
-                if ($file.FullName -match "\\$pattern\\") {
-                    $shouldExclude = $true
-                    break
+            # Check exclusions (Only if NOT in inclusion mode)
+            if (-not ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0)) {
+                $shouldExclude = $false
+                foreach ($ex in $ExcludedRepoSubfolders) {
+                    $pattern = [regex]::Escape($ex)
+                    if ($file.FullName -match "\\$pattern\\") {
+                        $shouldExclude = $true
+                        break
+                    }
                 }
-            }
 
-            if ($shouldExclude) { continue }
+                if ($shouldExclude) { continue }
 
-            # Check root file inclusion
-            if (-not $IncludeRootFiles -and -not $relPath.Contains('\')) {
-                continue
+                # Check root file inclusion (Only needed in exclusion mode, 
+                # as inclusion mode explicitly adds root files if requested)
+                if (-not $IncludeRootFiles -and -not $relPath.Contains('\')) {
+                    continue
+                }
             }
 
             # Construct destination path
@@ -251,7 +285,7 @@ try {
     }
 
     # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
-    Write-Host "`r$progressMsg - Completed.  "
+    Write-Host "`r$progressMsg Done.  "
 
     if (-not $anyFileError) {
         Write-BackupLog "$repoName Backup completed successfully."
@@ -274,7 +308,7 @@ catch {
 }
 finally {
     if ($backupSucceeded) {
-        Write-Host "$repoName Backup successful" -ForegroundColor Green
+        Write-Host "$repoName backup successful" -ForegroundColor Green
     }
     else {
         Write-Host "One or more errors occurred while backing up $repoName - check logs in ReactiveBackup solution folder" -ForegroundColor Red

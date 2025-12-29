@@ -39,13 +39,16 @@ $rootBackupDirectory = $config.rootBackupDirectory
 $logLevel            = $config.logLevel
 $backupLevel         = $config.backupLevel
 $includeRootFiles    = $config.includeRootFiles
-$excludedSubdirs     = $config.excludedSubdirectories
+$includedRepoFolders = $config.includedRepoFolders
+$excludedRepoFolders = $config.excludedRepoFolders
+$includedRepoSubfolders = $config.includedRepoSubfolders
+$excludedRepoSubfolders = $config.excludedRepoSubfolders
 $timestampFormat     = $config.timestampFormat
 
 # Ensure the backup directory name is always excluded to prevent recursion
 $backupDirName = Split-Path $rootBackupDirectory -Leaf
-if ($backupDirName -and $excludedSubdirs -notcontains $backupDirName) {
-    $excludedSubdirs += $backupDirName
+if ($backupDirName -and $excludedRepoSubfolders -notcontains $backupDirName) {
+    $excludedRepoSubfolders += $backupDirName
 }
 
 # Default log level if missing
@@ -79,7 +82,9 @@ function Get-LastBackupTime {
 function Get-TrackedFiles {
     param (
         [string]$Root,
-        [string[]]$ExcludedSubdirs
+        [string[]]$IncludedRepoSubfolders,
+        [string[]]$ExcludedRepoSubfolders,
+        [bool]$IncludeRootFiles
     )
 
     $spinner = @('|', '/', '-', '\')
@@ -89,36 +94,62 @@ function Get-TrackedFiles {
     # Initial spinner
     Write-Host $spinner[0] -NoNewline
 
-    # Get all files recursively
-    $allFiles = Get-ChildItem -Path $Root -Recurse -File -Exclude $ExcludedSubdirs -ErrorAction SilentlyContinue | ForEach-Object {
-        $count++
-        if ($count % 10 -eq 0) {
-            $spinIdx = ($spinIdx + 1) % 4
-            Write-Host "`b$($spinner[$spinIdx])" -NoNewline
-        }
-        $_
-    }
+    $files = @()
 
-    # Filter out exclusions
-    $files = $allFiles | Where-Object {
-        $count++
-        if ($count % 10 -eq 0) {
-            $spinIdx = ($spinIdx + 1) % 4
-            Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+    if ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0) {
+        # --- INCLUSION MODE ---
+        $candidates = @()
+        if ($IncludeRootFiles) {
+            $candidates += Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue
         }
-
-        $path = $_.FullName
-        $shouldExclude = $false
-        
-        foreach ($ex in $ExcludedSubdirs) {
-            # Escape the exclusion for regex and ensure it matches a directory boundary
-            $pattern = [regex]::Escape($ex)
-            if ($path -match "\\$pattern\\") {
-                $shouldExclude = $true
-                break
+        foreach ($sub in $IncludedRepoSubfolders) {
+            $path = Join-Path $Root $sub
+            if (Test-Path $path) {
+                $candidates += Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
             }
         }
-        -not $shouldExclude
+        
+        $files = $candidates | ForEach-Object {
+            $count++
+            if ($count % 10 -eq 0) {
+                $spinIdx = ($spinIdx + 1) % 4
+                Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+            }
+            $_
+        }
+    } 
+    else {
+        # --- EXCLUSION MODE ---
+        # Get all files recursively
+        $allFiles = Get-ChildItem -Path $Root -Recurse -File -Exclude $ExcludedRepoSubfolders -ErrorAction SilentlyContinue | ForEach-Object {
+            $count++
+            if ($count % 10 -eq 0) {
+                $spinIdx = ($spinIdx + 1) % 4
+                Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+            }
+            $_
+        }
+
+        # Filter out exclusions
+        $files = $allFiles | Where-Object {
+            $count++
+            if ($count % 10 -eq 0) {
+                $spinIdx = ($spinIdx + 1) % 4
+                Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+            }
+
+            $path = $_.FullName
+            $shouldExclude = $false
+            
+            foreach ($ex in $ExcludedRepoSubfolders) {
+                $pattern = [regex]::Escape($ex)
+                if ($path -match "\\$pattern\\") {
+                    $shouldExclude = $true
+                    break
+                }
+            }
+            -not $shouldExclude
+        }
     }
 
     # Clear spinner
@@ -135,7 +166,13 @@ $reposToCheck = @()
 if ($backupLevel -eq 'repo-parent') {
     # Iterate subfolders as repos
     if (Test-Path $rootCodeDirectory) {
-        $reposToCheck = Get-ChildItem -Path $rootCodeDirectory -Directory
+        $allRepos = Get-ChildItem -Path $rootCodeDirectory -Directory
+        
+        if ($includedRepoFolders -and $includedRepoFolders.Count -gt 0) {
+            $reposToCheck = $allRepos | Where-Object { $includedRepoFolders -contains $_.Name }
+        } else {
+            $reposToCheck = $allRepos | Where-Object { $excludedRepoFolders -notcontains $_.Name }
+        }
     }
 } else {
     # Default to 'repo' mode: rootCodeDirectory is the single repo
@@ -174,7 +211,7 @@ foreach ($repo in $reposToCheck) {
     $lastBackupTime = Get-LastBackupTime -BackupRoot $repoBackupPath
     
     try {
-        $trackedFiles = Get-TrackedFiles -Root $repoPath -ExcludedSubdirs $excludedSubdirs
+        $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
         Write-Host "" # Newline after spinner
     } catch {
         Write-Host "" # Newline after error
@@ -205,7 +242,7 @@ foreach ($repo in $reposToCheck) {
 
     if ($shouldBackup) {
         Write-Host "Running backup for $repoName..."
-        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -ExcludedSubdirectories $excludedSubdirs -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel
+        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel
         if ($LASTEXITCODE -eq 0) {
             Write-Log "  $repoName backup successful."
         } else {
