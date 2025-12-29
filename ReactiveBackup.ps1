@@ -1,4 +1,15 @@
 # ReactiveBackup.ps1
+# -------------------------------
+# Parameters (Override config if provided)
+# -------------------------------
+param(
+    [string]$SourceDirectory,
+    [string]$DestinationDirectory,
+    [string[]]$ExcludedSubdirectories,
+    [bool]$IncludeRootFiles,
+    [string]$TimestampFormat
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -30,42 +41,80 @@ try {
     $configPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
     $config     = (Get-Content $configPath -Raw -Encoding UTF8) | ConvertFrom-Json
 
-    foreach ($required in @(
-        'rootCodeDirectory',
-        'backupRootDirectory',
-        'includedSubdirectories',
-        'timestampFormat',
-        'includeRootFiles'
-    )) {
-        if (-not $config.PSObject.Properties.Name -contains $required) {
-            throw "Missing required config value: $required"
+    # -------------------------------
+    # Handle 'repo-parent' mode (Batch Mode)
+    # -------------------------------
+    if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
+        Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
+        $repoName = "All Repositories"
+        
+        $rootSrc = $config.rootCodeDirectory
+        $rootDest = $config.rootBackupDirectory
+        $excl = $config.excludedSubdirectories
+        $incRoot = [bool]$config.includeRootFiles
+        $fmt = $config.timestampFormat
+
+        # Ensure backup dir is excluded
+        $backupDirName = Split-Path $rootDest.TrimEnd('\', '/') -Leaf
+        if ($backupDirName -and $excl -notcontains $backupDirName) {
+            $excl += $backupDirName
         }
+
+        $repos = Get-ChildItem -Path $rootSrc -Directory
+        $anyFailure = $false
+
+        foreach ($repo in $repos) {
+            $normRepo = $repo.FullName.TrimEnd('\', '/')
+            $normBackup = $rootDest.TrimEnd('\', '/')
+            
+            if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
+                Write-Host "Skipping backup directory: $($repo.Name)"
+                continue
+            }
+
+            $repoDest = Join-Path $rootDest $repo.Name
+            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -ExcludedSubdirectories $excl -IncludeRootFiles $incRoot -TimestampFormat $fmt
+            if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
+        }
+
+        $backupSucceeded = (-not $anyFailure)
+        if ($backupSucceeded) { exit 0 } else { exit 1 }
     }
 
-    $rootCodeDirectory   = $config.rootCodeDirectory
-    $backupRootDirectory = $config.backupRootDirectory
-    $includedSubdirs     = $config.includedSubdirectories
-    $includeRootFiles    = [bool]$config.includeRootFiles
-    $timestampFormat     = $config.timestampFormat
-
-    if (-not (Test-Path $rootCodeDirectory)) {
-        throw "Root code directory not found: $rootCodeDirectory"
+    # Use params if provided, otherwise fall back to config
+    if (-not $SourceDirectory) { $SourceDirectory = $config.rootCodeDirectory }
+    if (-not $DestinationDirectory) { $DestinationDirectory = $config.rootBackupDirectory }
+    if (-not $ExcludedSubdirectories) { $ExcludedSubdirectories = $config.excludedSubdirectories }
+    if (-not $TimestampFormat) { $TimestampFormat = $config.timestampFormat }
+    # Handle boolean explicitly to avoid null issues
+    if (-not $PSBoundParameters.ContainsKey('IncludeRootFiles')) { 
+        $IncludeRootFiles = [bool]$config.includeRootFiles 
     }
 
-    if (-not (Test-Path $backupRootDirectory)) {
-        New-Item -ItemType Directory -Path $backupRootDirectory | Out-Null
+    # Validate required paths
+    if (-not $SourceDirectory) { throw "Source directory is not defined." }
+    if (-not $DestinationDirectory) { throw "Destination directory is not defined." }
+
+    if (-not (Test-Path $SourceDirectory)) {
+        throw "Source directory not found: $SourceDirectory"
     }
+
+    if (-not (Test-Path $DestinationDirectory)) {
+        New-Item -ItemType Directory -Path $DestinationDirectory | Out-Null
+    }
+
+    $repoName = Split-Path $SourceDirectory.TrimEnd('\', '/') -Leaf
 
     # -------------------------------
     # Generate Windows-safe timestamp
     # -------------------------------
-    $rawTimestamp = Get-Date -Format $timestampFormat
+    $rawTimestamp = Get-Date -Format $TimestampFormat
     $timestamp = $rawTimestamp `
         -replace ':', '.' `
         -replace '/', '-' `
         -replace '\\', '-'
 
-    $backupRoot = Join-Path $backupRootDirectory $timestamp
+    $backupRoot = Join-Path $DestinationDirectory $timestamp
     New-Item -ItemType Directory -Path $backupRoot | Out-Null
 
     # -------------------------------
@@ -82,30 +131,105 @@ try {
     # -------------------------------
     $backupLogPath = Join-Path $dataBackupPath 'backup.log'
     Add-Content $backupLogPath "Backup started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    Add-Content $backupLogPath "Source: $SourceDirectory"
 
     # -------------------------------
-    # Copy root files (optional)
+    # Copy files with exclusions
     # -------------------------------
-    if ($includeRootFiles -eq $true) {
-        Get-ChildItem $rootCodeDirectory -File |
-            ForEach-Object {
-                Copy-Item $_.FullName -Destination $codeBackupPath -Force
-            }
+    $spinner = @('|', '/', '-', '\')
+    $scanSpinIdx = 0
+    $scanCount = 0
+    $scanMsg = "Scanning for changes to files in $SourceDirectory..."
+    "" # write blank line
+    Write-Host -NoNewline "$($spinner[0]) $scanMsg"
+
+    $allFiles = Get-ChildItem -Path $SourceDirectory -Recurse -File | ForEach-Object {
+        $scanCount++
+        if ($scanCount % 10 -eq 0) {
+            $scanSpinIdx = ($scanSpinIdx + 1) % 4
+            Write-Host -NoNewline "`r$($spinner[$scanSpinIdx]) $scanMsg"
+        }
+        $_
     }
+    Write-Host "`r$scanMsg  "
 
-    # -------------------------------
-    # Copy included subdirectories
-    # -------------------------------
-    foreach ($sub in $includedSubdirs) {
-        $src = Join-Path $rootCodeDirectory $sub
-        if (Test-Path $src) {
-            $dest = Join-Path $codeBackupPath $sub
-            Copy-Item $src -Destination $dest -Recurse -Force
+    $anyFileError = $false
+    
+    # Progress spinner setup
+    $spinnerIndex = 0
+    $fileCounter = 0
+    
+    $progressMsg = "Backing up files in folders under $SourceDirectory..."
+    Write-Host -NoNewline "$($spinner[0]) $progressMsg"
+
+    foreach ($file in $allFiles) {
+        # Update spinner every 10 files
+        $fileCounter++
+        if ($fileCounter % 10 -eq 0) {
+            $spinnerIndex = ($spinnerIndex + 1) % 4
+            Write-Host -NoNewline "`r$($spinner[$spinnerIndex]) $progressMsg"
+        }
+
+        $targetFile = $null
+        $relPath = $file.Name # Default for error logging
+        try {
+            $relPath = $file.FullName.Substring($SourceDirectory.Length).TrimStart('\', '/')
+            
+            # Check exclusions
+            $shouldExclude = $false
+            foreach ($ex in $ExcludedSubdirectories) {
+                $pattern = [regex]::Escape($ex)
+                if ($file.FullName -match "\\$pattern\\") {
+                    $shouldExclude = $true
+                    break
+                }
+            }
+
+            if ($shouldExclude) { continue }
+
+            # Check root file inclusion
+            if (-not $IncludeRootFiles -and -not $relPath.Contains('\')) {
+                continue
+            }
+
+            # Construct destination path
+            $targetFile = Join-Path $codeBackupPath $relPath
+            $targetDir = Split-Path $targetFile -Parent
+
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            }
+
+            Copy-Item -Path $file.FullName -Destination $targetFile -Force
+        }
+        catch {
+            $anyFileError = $true
+            $errorMsg = $_.Exception.Message
+            
+            # Check for potential long path issue (MAX_PATH = 260)
+            if ($targetFile -and $targetFile.Length -ge 260) {
+                $errorMsg = "Path too long ($($targetFile.Length) chars). Windows limit is 260. Original Error: $errorMsg"
+            }
+            
+            Add-Content $backupLogPath "ERROR copying file '$($file.FullName)': $errorMsg"
+            # Print error on new line, then restore spinner prompt
+            # Clear line first to ensure clean error display
+            Write-Host "`r$(' ' * ($progressMsg.Length + 5))" -NoNewline
+            Write-Host "`r[Error] Failed to copy $($relPath): $errorMsg" -ForegroundColor Red
+            Write-Host -NoNewline "$($spinner[$spinnerIndex]) $progressMsg"
         }
     }
 
-    Add-Content $backupLogPath "Backup completed successfully."
-    $backupSucceeded = $true
+    # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
+    Write-Host "`r$progressMsg  "
+
+    if (-not $anyFileError) {
+        Add-Content $backupLogPath "$repoName Backup completed successfully."
+        $backupSucceeded = $true
+    } else {
+        Add-Content $backupLogPath "Backup completed with errors (see above)."
+        # We leave $backupSucceeded as false so the script exits with 1 to indicate partial failure
+    }
 }
 catch {
     Write-ErrorLog $_.Exception.ToString()
@@ -119,9 +243,15 @@ catch {
 }
 finally {
     if ($backupSucceeded) {
-        Write-Host "Backup successful" -ForegroundColor Green
+        Write-Host "$repoName Backup successful" -ForegroundColor Green
     }
     else {
-        Write-Host "One or more errors occurred during backup - check logs in ReactiveBackup solution folder" -ForegroundColor Red
+        Write-Host "One or more errors occurred while backing up $repoName - check logs in ReactiveBackup solution folder" -ForegroundColor Red
     }
+}
+
+if ($backupSucceeded) {
+    exit 0
+} else {
+    exit 1
 }

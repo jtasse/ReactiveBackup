@@ -24,10 +24,17 @@ if (-not (Test-Path $configPath)) {
 $config = Get-Content $configPath | ConvertFrom-Json
 
 $rootCodeDirectory   = $config.rootCodeDirectory
-$backupRootDirectory = $config.backupRootDirectory
+$rootBackupDirectory = $config.rootBackupDirectory
+$backupLevel         = $config.backupLevel
 $includeRootFiles    = $config.includeRootFiles
-$includedSubdirs     = $config.includedSubdirectories
+$excludedSubdirs     = $config.excludedSubdirectories
 $timestampFormat     = $config.timestampFormat
+
+# Ensure the backup directory name is always excluded to prevent recursion
+$backupDirName = Split-Path $rootBackupDirectory -Leaf
+if ($backupDirName -and $excludedSubdirs -notcontains $backupDirName) {
+    $excludedSubdirs += $backupDirName
+}
 
 # --- Get last backup time ---
 function Get-LastBackupTime {
@@ -55,59 +62,137 @@ function Get-LastBackupTime {
 function Get-TrackedFiles {
     param (
         [string]$Root,
-        [bool]$IncludeRootFiles,
-        [string[]]$IncludedSubdirs
+        [string[]]$ExcludedSubdirs
     )
 
-    $files = @()
+    $spinner = @('|', '/', '-', '\')
+    $spinIdx = 0
+    $count = 0
+    
+    # Initial spinner
+    Write-Host $spinner[0] -NoNewline
 
-    if ($IncludeRootFiles) {
-        $files += Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue
-    }
-
-    foreach ($sub in $IncludedSubdirs) {
-        $fullPath = Join-Path $Root $sub
-        if (Test-Path $fullPath) {
-            $files += Get-ChildItem -Path $fullPath -Recurse -File -ErrorAction SilentlyContinue
+    # Get all files recursively
+    $allFiles = Get-ChildItem -Path $Root -Recurse -File -Exclude $ExcludedSubdirs -ErrorAction SilentlyContinue | ForEach-Object {
+        $count++
+        if ($count % 10 -eq 0) {
+            $spinIdx = ($spinIdx + 1) % 4
+            Write-Host "`b$($spinner[$spinIdx])" -NoNewline
         }
+        $_
     }
+
+    # Filter out exclusions
+    $files = $allFiles | Where-Object {
+        $count++
+        if ($count % 10 -eq 0) {
+            $spinIdx = ($spinIdx + 1) % 4
+            Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+        }
+
+        $path = $_.FullName
+        $shouldExclude = $false
+        
+        foreach ($ex in $ExcludedSubdirs) {
+            # Escape the exclusion for regex and ensure it matches a directory boundary
+            $pattern = [regex]::Escape($ex)
+            if ($path -match "\\$pattern\\") {
+                $shouldExclude = $true
+                break
+            }
+        }
+        -not $shouldExclude
+    }
+
+    # Clear spinner
+    Write-Host "`b " -NoNewline
 
     return $files
 }
 
 # --- Main logic ---
-$lastBackupTime = Get-LastBackupTime `
-    -BackupRoot $backupRootDirectory
 
-$trackedFiles = Get-TrackedFiles `
-    -Root $rootCodeDirectory `
-    -IncludeRootFiles $includeRootFiles `
-    -IncludedSubdirs $includedSubdirs
+# Determine which repositories to check based on backupLevel
+$reposToCheck = @()
 
-Write-Log "Tracked files: $($trackedFiles))"
-
-if (-not $trackedFiles) {
-    Write-Log "No tracked files found. Exiting."
-    return
+if ($backupLevel -eq 'repo-parent') {
+    # Iterate subfolders as repos
+    if (Test-Path $rootCodeDirectory) {
+        $reposToCheck = Get-ChildItem -Path $rootCodeDirectory -Directory
+    }
+} else {
+    # Default to 'repo' mode: rootCodeDirectory is the single repo
+    if (Test-Path $rootCodeDirectory) {
+        $reposToCheck = @(Get-Item $rootCodeDirectory)
+    }
 }
 
-$latestFileChange = ($trackedFiles |
-    Sort-Object { $_.LastWriteTimeUtc } -Descending |
-    Select-Object -First 1).LastWriteTimeUtc
+foreach ($repo in $reposToCheck) {
+    $repoName = $repo.Name
+    $repoPath = $repo.FullName
+    
+    # Skip the backup directory if it is found within the source directories
+    $normRepo      = $repoPath.TrimEnd('\', '/')
+    $normBackup    = $rootBackupDirectory.TrimEnd('\', '/')
+    $backupDirName = Split-Path $normBackup -Leaf
 
-if (-not $lastBackupTime) {
-    Write-Log "No prior backup found. Running initial backup."
-    & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1')
-    return
-}
+    Write-Log "Processing repository: $repoName";
 
-Write-Log "Last backup time: $lastBackupTime"
-Write-Log "Latest file change: $latestFileChange"
+    if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
+        Write-Log "Skipping backup directory: $repoName"
+        Write-Host "Skipping backup directory: $repoName"
+        continue
+    }
 
-if ($latestFileChange -gt $lastBackupTime) {
-    Write-Log "Changes detected. Running backup."
-    & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1')
-}
-else {
-    Write-Log "No changes detected. Backup not required."
+    # Determine backup destination for this repo
+    $repoBackupPath = Join-Path $rootBackupDirectory $repoName
+
+    if (-not (Test-Path $repoBackupPath)) {
+        New-Item -ItemType Directory -Path $repoBackupPath -Force | Out-Null
+    }
+
+    Write-Log "Checking repo: $repoName"
+    Write-Host "Checking repo: $repoName... " -NoNewline
+
+    $lastBackupTime = Get-LastBackupTime -BackupRoot $repoBackupPath
+    
+    try {
+        $trackedFiles = Get-TrackedFiles -Root $repoPath -ExcludedSubdirs $excludedSubdirs
+        Write-Host "" # Newline after spinner
+    } catch {
+        Write-Host "" # Newline after error
+        Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)"
+        Write-Host "Error scanning repo $repoName : $($_.Exception.Message)" -ForegroundColor Red
+        continue
+    }
+
+    if (-not $trackedFiles) {
+        Write-Log "  No tracked files found in $repoName."
+        Write-Host "No tracked files found in $repoName."
+        continue
+    }
+
+    $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+
+    $shouldBackup = $false
+    if (-not $lastBackupTime) {
+        Write-Log "  No prior backup found. Backup required."
+        $shouldBackup = $true
+    } elseif ($latestFileChange -gt $lastBackupTime) {
+        Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
+        $shouldBackup = $true
+    } else {
+        Write-Log "  No changes detected."
+        Write-Host "No changes detected."
+    }
+
+    if ($shouldBackup) {
+        Write-Host "Running backup for $repoName..."
+        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -ExcludedSubdirectories $excludedSubdirs -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "  $repoName backup successful."
+        } else {
+            Write-Log "  $repoName backup failed."
+        }
+    }
 }
