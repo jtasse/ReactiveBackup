@@ -196,7 +196,7 @@ try {
     $prepSpinIdx = 0
     $repoBackupCount = 0
     $prepareMsg = "Preparing to back up files in $SourceDirectory..."
-    "" # write blank line
+    Write-Host "" # write blank line
     Write-Host -NoNewline "$($spinner[0]) $prepareMsg"
 
     try {
@@ -329,7 +329,7 @@ catch {
 finally {
     if ($backupSucceeded) {
         if ($isBatchMode) {
-            ""
+            Write-Host ""
             Write-Host "Repository backups completed"
         }
         else {

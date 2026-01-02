@@ -1,3 +1,5 @@
+param([switch]$ScheduledTask)
+
 # ReactiveBackup.EvaluateAndRun.ps1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -25,51 +27,6 @@ function Write-Log {
         Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
     }
 }
-
-# --- Load config ---
-$defaultConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
-if (-not (Test-Path $defaultConfigPath)) {
-    throw "Config file not found at $defaultConfigPath"
-}
-
-# Load default config first
-$config = Get-Content $defaultConfigPath | ConvertFrom-Json
-
-$actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
-if (Test-Path $actualConfigPath) {
-    try {
-        $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
-        if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
-            throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
-        }
-        $config = $actualConfig
-    }
-    catch {
-        Write-Log "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
-    }
-}
-
-$rootCodeDirectory   = $config.rootCodeDirectory
-$rootBackupDirectory = $config.rootBackupDirectory
-$logLevel            = $config.logLevel
-$backupLevel         = $config.backupLevel
-$includeRootFiles    = $config.includeRootFiles
-$includedRepoFolders = $config.includedRepoFolders
-$excludedRepoFolders = $config.excludedRepoFolders
-$includedRepoSubfolders = $config.includedRepoSubfolders
-$excludedRepoSubfolders = $config.excludedRepoSubfolders
-$timestampFormat     = $config.timestampFormat
-
-# Ensure the backup directory name is always excluded to prevent recursion
-$backupDirName = Split-Path $rootBackupDirectory -Leaf
-if ($backupDirName -and $excludedRepoSubfolders -notcontains $backupDirName) {
-    $excludedRepoSubfolders += $backupDirName
-}
-
-# Default log level if missing
-if (-not $logLevel) { $logLevel = "error" }
-# Ensure config object has it for Write-Log to use
-if (-not $config.PSObject.Properties.Name -contains 'logLevel') { $config | Add-Member -MemberType NoteProperty -Name 'logLevel' -Value $logLevel }
 
 # --- Get last backup time ---
 function Get-LastBackupTime {
@@ -173,95 +130,168 @@ function Get-TrackedFiles {
     return $files
 }
 
-# --- Main logic ---
+function Invoke-BackupCycle {
+    # --- Load config ---
+    $defaultConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
+    if (-not (Test-Path $defaultConfigPath)) {
+        throw "Config file not found at $defaultConfigPath"
+    }
 
-# Determine which repositories to check based on backupLevel
-$reposToCheck = @()
+    # Load default config first
+    $config = Get-Content $defaultConfigPath | ConvertFrom-Json
 
-if ($backupLevel -eq 'repo-parent') {
-    # Iterate subfolders as repos
-    if (Test-Path $rootCodeDirectory) {
-        $allRepos = Get-ChildItem -Path $rootCodeDirectory -Directory
-        
-        if ($includedRepoFolders -and $includedRepoFolders.Count -gt 0) {
-            $reposToCheck = $allRepos | Where-Object { $includedRepoFolders -contains $_.Name }
-        } else {
-            $reposToCheck = $allRepos | Where-Object { $excludedRepoFolders -notcontains $_.Name }
+    $actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
+    if (Test-Path $actualConfigPath) {
+        try {
+            $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
+                throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
+            }
+            $config = $actualConfig
+        }
+        catch {
+            Write-Log "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
         }
     }
-} else {
-    # Default to 'repo' mode: rootCodeDirectory is the single repo
-    if (Test-Path $rootCodeDirectory) {
-        $reposToCheck = @(Get-Item $rootCodeDirectory)
+
+    $rootCodeDirectory   = $config.rootCodeDirectory
+    $rootBackupDirectory = $config.rootBackupDirectory
+    $logLevel            = $config.logLevel
+    $backupLevel         = $config.backupLevel
+    $includeRootFiles    = $config.includeRootFiles
+    $includedRepoFolders = $config.includedRepoFolders
+    $excludedRepoFolders = $config.excludedRepoFolders
+    $includedRepoSubfolders = $config.includedRepoSubfolders
+    $excludedRepoSubfolders = $config.excludedRepoSubfolders
+    $timestampFormat     = $config.timestampFormat
+
+    # Ensure the backup directory name is always excluded to prevent recursion
+    $backupDirName = Split-Path $rootBackupDirectory -Leaf
+    if ($backupDirName -and $excludedRepoSubfolders -notcontains $backupDirName) {
+        $excludedRepoSubfolders += $backupDirName
     }
+
+    # Default log level if missing
+    if (-not $logLevel) { $logLevel = "error" }
+    # Ensure config object has it for Write-Log to use
+    if (-not $config.PSObject.Properties.Name -contains 'logLevel') { $config | Add-Member -MemberType NoteProperty -Name 'logLevel' -Value $logLevel }
+
+    # --- Main logic ---
+
+    # Determine which repositories to check based on backupLevel
+    $reposToCheck = @()
+
+    if ($backupLevel -eq 'repo-parent') {
+        # Iterate subfolders as repos
+        if (Test-Path $rootCodeDirectory) {
+            $allRepos = Get-ChildItem -Path $rootCodeDirectory -Directory
+            
+            if ($includedRepoFolders -and $includedRepoFolders.Count -gt 0) {
+                $reposToCheck = $allRepos | Where-Object { $includedRepoFolders -contains $_.Name }
+            } else {
+                $reposToCheck = $allRepos | Where-Object { $excludedRepoFolders -notcontains $_.Name }
+            }
+        }
+    } else {
+        # Default to 'repo' mode: rootCodeDirectory is the single repo
+        if (Test-Path $rootCodeDirectory) {
+            $reposToCheck = @(Get-Item $rootCodeDirectory)
+        }
+    }
+
+    foreach ($repo in $reposToCheck) {
+        $repoName = $repo.Name
+        $repoPath = $repo.FullName
+        
+        # Skip the backup directory if it is found within the source directories
+        $normRepo      = $repoPath.TrimEnd('\', '/')
+        $normBackup    = $rootBackupDirectory.TrimEnd('\', '/')
+        $backupDirName = Split-Path $normBackup -Leaf
+
+        Write-Log "Processing repository: $repoName";
+
+        if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
+            Write-Log "Skipping backup directory: $repoName"
+            Write-Host "Skipping backup directory: $repoName"
+            continue
+        }
+
+        # Determine backup destination for this repo
+        $repoBackupPath = Join-Path $rootBackupDirectory $repoName
+
+        if (-not (Test-Path $repoBackupPath)) {
+            New-Item -ItemType Directory -Path $repoBackupPath -Force | Out-Null
+        }
+
+        Write-Log "Checking repo: $repoName"
+        Write-Host "Checking repo: $repoName... " -NoNewline
+
+        $lastBackupTime = Get-LastBackupTime -BackupRoot $repoBackupPath
+        
+        try {
+            $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            Write-Host "" # Newline after spinner
+        } catch {
+            Write-Host "" # Newline after error
+            Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)" -Level Error
+            Write-Host "Error scanning repo $repoName : $($_.Exception.Message)" -ForegroundColor Red
+            continue
+        }
+
+        if (-not $trackedFiles) {
+            Write-Log "  No tracked files found in $repoName."
+            Write-Host "No tracked files found in $repoName."
+            continue
+        }
+
+        $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+
+        $shouldBackup = $false
+        if (-not $lastBackupTime) {
+            Write-Log "  No prior backup found. Backup required."
+            $shouldBackup = $true
+        } elseif ($latestFileChange -gt $lastBackupTime) {
+            Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
+            $shouldBackup = $true
+        } else {
+            Write-Log "  No changes detected."
+            Write-Host "No changes detected."
+        }
+
+        if ($shouldBackup) {
+            Write-Host "Running backup for $repoName..."
+            & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log "  $repoName backup successful."
+            } else {
+                Write-Log "  $repoName backup failed." -Level Error
+            }
+        }
+    }
+
+    return $config.checkForCodeChangesIntervalMinutes
 }
 
-foreach ($repo in $reposToCheck) {
-    $repoName = $repo.Name
-    $repoPath = $repo.FullName
+if ($ScheduledTask) {
+    Invoke-BackupCycle | Out-Null
+} else {
+    Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
+    Write-Host "--------------------------"
+    Write-Host "1. Run Once"
+    Write-Host "2. Run Continuously"
     
-    # Skip the backup directory if it is found within the source directories
-    $normRepo      = $repoPath.TrimEnd('\', '/')
-    $normBackup    = $rootBackupDirectory.TrimEnd('\', '/')
-    $backupDirName = Split-Path $normBackup -Leaf
-
-    Write-Log "Processing repository: $repoName";
-
-    if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
-        Write-Log "Skipping backup directory: $repoName"
-        Write-Host "Skipping backup directory: $repoName"
-        continue
-    }
-
-    # Determine backup destination for this repo
-    $repoBackupPath = Join-Path $rootBackupDirectory $repoName
-
-    if (-not (Test-Path $repoBackupPath)) {
-        New-Item -ItemType Directory -Path $repoBackupPath -Force | Out-Null
-    }
-
-    Write-Log "Checking repo: $repoName"
-    Write-Host "Checking repo: $repoName... " -NoNewline
-
-    $lastBackupTime = Get-LastBackupTime -BackupRoot $repoBackupPath
+    $selection = Read-Host "Select an option (1-2)"
     
-    try {
-        $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
-        Write-Host "" # Newline after spinner
-    } catch {
-        Write-Host "" # Newline after error
-        Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)" -Level Error
-        Write-Host "Error scanning repo $repoName : $($_.Exception.Message)" -ForegroundColor Red
-        continue
-    }
-
-    if (-not $trackedFiles) {
-        Write-Log "  No tracked files found in $repoName."
-        Write-Host "No tracked files found in $repoName."
-        continue
-    }
-
-    $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
-
-    $shouldBackup = $false
-    if (-not $lastBackupTime) {
-        Write-Log "  No prior backup found. Backup required."
-        $shouldBackup = $true
-    } elseif ($latestFileChange -gt $lastBackupTime) {
-        Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
-        $shouldBackup = $true
-    } else {
-        Write-Log "  No changes detected."
-        Write-Host "No changes detected."
-    }
-
-    if ($shouldBackup) {
-        Write-Host "Running backup for $repoName..."
-        & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "  $repoName backup successful."
-        } else {
-            Write-Log "  $repoName backup failed." -Level Error
+    if ($selection -eq '2') {
+        Write-Host "Starting continuous backup mode. Press Ctrl+C to stop." -ForegroundColor Yellow
+        while ($true) {
+            $interval = Invoke-BackupCycle
+            if (-not $interval) { $interval = 15 }
+            
+            Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
+            Start-Sleep -Seconds ($interval * 60)
         }
+    } else {
+        Invoke-BackupCycle | Out-Null
     }
 }

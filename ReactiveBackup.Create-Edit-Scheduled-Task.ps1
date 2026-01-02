@@ -76,7 +76,7 @@ try {
 
             # Action: run PowerShell hidden
             $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-                        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+                        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`" -ScheduledTask"
 
             # Register the task
             Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action `
