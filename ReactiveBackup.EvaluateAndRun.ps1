@@ -14,8 +14,10 @@ function Write-Log {
     # 'error' level: only show Error
     # 'info' level: show Info and Error
     $shouldLog = $false
-    if ($config.logLevel -eq 'info') { $shouldLog = $true }
-    elseif ($config.logLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
+    $currentLogLevel = if ($config -and $config.logLevel) { $config.logLevel } else { "error" }
+
+    if ($currentLogLevel -eq 'info') { $shouldLog = $true }
+    elseif ($currentLogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
 
     if ($shouldLog) {
         $logDir = Join-Path $PSScriptRoot 'logs'
@@ -24,7 +26,8 @@ function Write-Log {
         }
         $logPath = Join-Path $logDir "ReactiveBackup.log"
         $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
+        $prefix = if ($ScheduledTask) { "[ScheduledTask] " } else { "" }
+        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $prefix$Message"
     }
 }
 
@@ -288,6 +291,7 @@ if ($ScheduledTask) {
             $interval = Invoke-BackupCycle
             if (-not $interval) { $interval = 15 }
             
+            Write-Host "Current time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
             Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
             Start-Sleep -Seconds ($interval * 60)
         }

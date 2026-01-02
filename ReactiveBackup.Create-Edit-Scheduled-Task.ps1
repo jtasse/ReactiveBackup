@@ -4,13 +4,25 @@ $ErrorActionPreference = 'Stop'
 
 $taskName = "Reactive Backup"
 
-function Write-ErrorLog {
-    param([string]$Message)
-    $logDir = Join-Path $PSScriptRoot 'logs'
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
-    $logPath = Join-Path $logDir "ReactiveBackupScheduledTask.errors.log"
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content -Path $logPath -Value "[$timestamp] $Message"
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "Info"
+    )
+    
+    $shouldLog = $false
+    $currentLogLevel = if ($config -and $config.logLevel) { $config.logLevel } else { "error" }
+    
+    if ($currentLogLevel -eq 'info') { $shouldLog = $true }
+    elseif ($currentLogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
+
+    if ($shouldLog) {
+        $logDir = Join-Path $PSScriptRoot 'logs'
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+        $logPath = Join-Path $logDir "ReactiveBackup.log"
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -Path $logPath -Value "[$timestamp] [$Level] [TaskManagement] $Message"
+    }
 }
 
 try {
@@ -30,7 +42,7 @@ try {
             $config = $actualConfig
         }
         catch {
-            Write-ErrorLog "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config."
+            Write-Log "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
         }
     }
 
@@ -87,6 +99,6 @@ try {
     }
 }
 catch {
-    Write-ErrorLog $_.Exception.ToString()
+    Write-Log $_.Exception.ToString() -Level Error
     Write-Host "Error managing scheduled task. Check logs." -ForegroundColor Red
 }
