@@ -168,6 +168,10 @@ function Invoke-BackupCycle {
     $excludedRepoSubfolders = $config.excludedRepoSubfolders
     $timestampFormat     = $config.timestampFormat
 
+    # Normalize paths to support forward slashes (JSON friendly) and network paths
+    $rootCodeDirectory = [System.IO.Path]::GetFullPath($rootCodeDirectory)
+    $rootBackupDirectory = [System.IO.Path]::GetFullPath($rootBackupDirectory)
+
     # Ensure the backup directory name is always excluded to prevent recursion
     $backupDirName = Split-Path $rootBackupDirectory -Leaf
     if ($backupDirName -and $excludedRepoSubfolders -notcontains $backupDirName) {

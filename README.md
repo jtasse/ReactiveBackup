@@ -6,14 +6,16 @@
   - [Windows](#windows)
   - [MacOS](#macos)
   - [Linux](#linux)
-- [Configuration](#configuration)
+- **[Configuration](#configuration)**
 - [Backup Output Structure](#backup-output-structure)
 - [Logging](#logging)
-- [Running a Backup Manually (Ad Hoc)](#running-a-backup-manually-ad-hoc)
-- [Running Backups Conditionally](#running-backups-conditionally)
-  - [Run Once](#run-once)
-  - [Run Continuously](#run-continuously)
-  - [Running Backups via Task Scheduler (Windows only)](#running-backups-via-task-scheduler-windows-only)
+- **[Usage](#usage)**
+  - **[Getting Started](#getting-started)**
+  - [Running a Backup Manually (Ad Hoc)](#running-a-backup-manually-ad-hoc)
+  - [Running Backups Conditionally](#running-backups-conditionally)
+    - [Run Once](#run-once)
+    - [Run Continuously](#run-continuously)
+    - [Running Backups via Task Scheduler (Windows only)](#running-backups-via-task-scheduler-windows-only)
 - [Reporting Issues](#reporting-issues)
 
 # What Is It?
@@ -110,7 +112,22 @@ When a backup runs, it creates a folder in your `rootBackupDirectory` named with
 
 The solution generates logs (based on the `logLevel` setting in [configuration](#configuration)) in a `ReactiveBackup.log` file in the `logs` folder at the root of the ReactiveBackup solution directory.
 
-# Running a Backup Manually (Ad Hoc)
+# Usage
+
+## Getting Started
+
+1. **Download the Solution**: Clone the repository or download the source code to a local folder on your machine.
+2. **Configure**: Open the `ReactiveBackup.config` file in a text editor.
+   - Update `rootCodeDirectory` to point to the folder containing the code you want to back up.
+   - Update `rootBackupDirectory` to point to the folder where you want backups to be stored.
+   - (Optional) Adjust other settings like `backupLevel` or `checkForCodeChangesIntervalMinutes` as needed.
+3. **Run a Test**: Open PowerShell, navigate to the solution folder, and run the manual backup script to ensure everything is working:
+   ```powershell
+   .\ReactiveBackup.ps1
+   ```
+4. **Verify**: Check your configured `rootBackupDirectory`. You should see a new folder with the current timestamp containing your code.
+
+## Running a Backup Manually (Ad Hoc)
 
 You can run a backup manually by executing the `ReactiveBackup.ps1` script in PowerShell.
 
@@ -124,7 +141,7 @@ By default, it uses the settings in `ReactiveBackup.config`. You can also overri
 .\ReactiveBackup.ps1 -SourceDirectory "C:\MyCode" -DestinationDirectory "D:\Backups" -LogLevel "Info"
 ```
 
-# Running Backups Conditionally
+## Running Backups Conditionally
 
 If you want to conditionally (i.e. - based on the `checkForCodeChangesIntervalMinutes` setting) run one or more backups, you can execute the `ReactiveBackup.EvaluateAndRun.ps1` script.
 
@@ -136,17 +153,17 @@ This script has 2 modes: `Run Once` and `Run Continuously`:
 
 ![Evaluation Script Choice](readme-images\eval-script-choice.png)
 
-## Run Once
+### Run Once
 
 To run the script only once, enter `1` to have the script check the configured `checkForCodeChangesIntervalMinutes` and run a backup conditionally based on that value.
 
-## Run Continuously
+### Run Continuously
 
 Enter `2` at the prompt to put the script in a mode that will run scheduled backups continuously based on the configuration (including `checkForCodeChangesIntervalMinutes`).
 
 To stop this process, press enter `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
 
-## Running Backups via Task Scheduler (Windows only)
+### Running Backups via Task Scheduler (Windows only)
 
 For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` script to create a scheduled task that will
 

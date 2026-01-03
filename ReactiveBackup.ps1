@@ -138,6 +138,10 @@ try {
     if (-not $SourceDirectory) { throw "Source directory is not defined." }
     if (-not $DestinationDirectory) { throw "Destination directory is not defined." }
 
+    # Normalize paths to support forward slashes (JSON friendly) and network paths
+    $SourceDirectory = [System.IO.Path]::GetFullPath($SourceDirectory)
+    $DestinationDirectory = [System.IO.Path]::GetFullPath($DestinationDirectory)
+
     if (-not (Test-Path $SourceDirectory)) {
         throw "Source directory not found: $SourceDirectory"
     }
@@ -259,7 +263,8 @@ try {
             if (-not ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0)) {
                 $shouldExclude = $false
                 foreach ($ex in $ExcludedRepoSubfolders) {
-                    $pattern = [regex]::Escape($ex)
+                    # Normalize exclusion path separators to match OS
+                    $pattern = [regex]::Escape($ex.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
                     if ($file.FullName -match "\\$pattern\\") {
                         $shouldExclude = $true
                         break
