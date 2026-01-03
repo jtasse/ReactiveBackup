@@ -127,6 +127,8 @@ The solution generates logs (based on the `logLevel` setting in [configuration](
    ```
 4. **Verify**: Check your configured `rootBackupDirectory`. You should see a new folder with the current timestamp containing your code.
 
+If something goes wrong, check the log within the `logs` folder within the `ReactiveBackup` directory for any errors.
+
 ## Running a Backup Manually (Ad Hoc)
 
 You can run a backup manually by executing the `ReactiveBackup.ps1` script in PowerShell.
