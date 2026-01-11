@@ -102,9 +102,13 @@ try {
             $action = New-ScheduledTaskAction -Execute "powershell.exe" `
                         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`" -ScheduledTask"
 
+            # Principal: Run as current user, S4U (background, no password)
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
+
             # Register the task
             Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action `
-                                   -RunLevel Limited -User $env:USERNAME
+                                   -Principal $principal -Settings $settings
 
             Write-Host "Created scheduled task '$taskName' to run every $repeatMinutes minutes (hidden)."
         }

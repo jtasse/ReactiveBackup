@@ -206,11 +206,13 @@ Enter `2` at the prompt to put the script in a mode that will run scheduled back
 
 To stop this process, press enter `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
 
-### Running Backups via Task Scheduler (Windows only)
+### Backing up via Task Scheduler (Windows only)
 
-For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` script to create a scheduled task that will
+For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` script to create a scheduled task.
 
-1. Open PowerShell (Run as Administrator is recommended for Task Scheduler operations).
+#### Creating the Scheduled Task
+
+1. Run PowerShell as an administrator and navigate to the folder containing the ReactiveBackup solution.
 2. Run the script:
    ```powershell
    .\ReactiveBackup.Create-Edit-Scheduled-Task.ps1
@@ -220,8 +222,6 @@ For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps
    - If the task exists, you can choose to **Start**, **Stop**, or **Delete** it.
 
 The scheduled task runs `ReactiveBackup.EvaluateAndRun.ps1` in the background at the configured interval defined in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one.
-
-> **NOTE**: when Task Scheduler runs the script, a PowerShell window will appear, execute the script, and then disappear. While this can be annoying, it does not seem to pull mouse/keyboard focus, which would be _super_ annoying :)
 
 # Reporting Issues
 

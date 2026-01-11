@@ -154,6 +154,7 @@ function Invoke-BackupCycle {
 
     # Load default config first
     $config = Get-JsonConfig -Path $defaultConfigPath
+    $defaultInterval = $config.checkForCodeChangesIntervalMinutes
 
     $actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
     if (Test-Path $actualConfigPath) {
@@ -163,6 +164,10 @@ function Invoke-BackupCycle {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }
             $config = $actualConfig
+
+            if (-not $config.PSObject.Properties.Name -contains 'checkForCodeChangesIntervalMinutes') {
+                $config | Add-Member -MemberType NoteProperty -Name 'checkForCodeChangesIntervalMinutes' -Value $defaultInterval
+            }
         }
         catch {
             Write-Log "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
@@ -292,7 +297,7 @@ function Invoke-BackupCycle {
 }
 
 if ($ScheduledTask) {
-    Invoke-BackupCycle | Out-Null
+    Invoke-BackupCycle *>$null
 } else {
     Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
     Write-Host "--------------------------"
@@ -303,9 +308,10 @@ if ($ScheduledTask) {
     
     if ($selection -eq '2') {
         Write-Host "Starting continuous backup mode. Press Ctrl+C to stop." -ForegroundColor Yellow
+        $interval = 15
         while ($true) {
-            $interval = Invoke-BackupCycle
-            if (-not $interval) { $interval = 15 }
+            $runInterval = Invoke-BackupCycle
+            if ($runInterval) { $interval = $runInterval }
             
             Write-Host "Current time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
             Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
