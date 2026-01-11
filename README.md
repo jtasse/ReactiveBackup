@@ -12,6 +12,8 @@
 - **[Usage](#usage)**
   - **[Getting Started](#getting-started)**
   - [Running a Backup Manually (Ad Hoc)](#running-a-backup-manually-ad-hoc)
+    - [Supplying a Backup Message (OPTIONAL)](#supplying-a-backup-message-optional)
+    - [Modifying Default Behavior](#modifying-default-behavior)
   - [Running Backups Conditionally](#running-backups-conditionally)
     - [Run Once](#run-once)
     - [Run Continuously](#run-continuously)
@@ -103,7 +105,7 @@ Configuration is handled via `ReactiveBackup.config` at the root of the repo. Yo
 
 # Backup Output Structure
 
-When a backup runs, it creates a folder in your `rootBackupDirectory` named with the timestamp. Inside that folder:
+When a backup runs, it creates a folder in your `rootBackupDirectory` named with the timestamp (and optional description). Inside that folder:
 
 - `code`: Contains the backed-up source files.
 - `backup data`: Contains metadata and logs specific to that backup operation.
@@ -137,7 +139,25 @@ You can run a backup manually by executing the `ReactiveBackup.ps1` script in Po
 .\ReactiveBackup.ps1
 ```
 
-By default, it uses the settings in `ReactiveBackup.config`. You can also override settings using parameters:
+### Supplying a Backup Message (OPTIONAL)
+
+If you would like the ad hoc backup folder to have a custom description, you can add one by using the `-m` or `--message` parameter.
+
+For example, if you made a backup call to `.\ReactiveBackup.ps1` at 11:42AM on 01/09/2026 using the following syntax:
+
+```
+.\ReactiveBackup.ps1 -m "Here is my backup description"
+```
+
+...the result would be a backup folder with a name like:
+
+`20260109 - 11.42 AM - Here is my backup description`
+
+> **NOTE**: actual backup folder names may vary on account of timestamp configuration
+
+### Modifying Default Behavior
+
+By default, the uses the settings in `ReactiveBackup.config`. You can also override these settings using parameters:
 
 ```powershell
 .\ReactiveBackup.ps1 -SourceDirectory "C:\MyCode" -DestinationDirectory "D:\Backups" -LogLevel "Info"

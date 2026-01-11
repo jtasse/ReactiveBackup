@@ -9,7 +9,9 @@ param(
     [string[]]$ExcludedRepoSubfolders,
     [bool]$IncludeRootFiles,
     [string]$TimestampFormat,
-    [string]$LogLevel
+    [string]$LogLevel,
+    [Alias('m')]
+    [string]$Message
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +21,7 @@ $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
 $backupSucceeded = $false
 $backupRoot = $null
 $isBatchMode = $false
+$repoName = "Unknown Repo"
 
 # -------------------------------
 # Centralized Solution Logging
@@ -73,6 +76,15 @@ try {
     if (-not $LogLevel) { $LogLevel = "error" }
 
     # -------------------------------
+    # Handle --message argument workaround
+    # -------------------------------
+    if ($SourceDirectory -eq '--message' -and $DestinationDirectory) {
+        if ([string]::IsNullOrWhiteSpace($Message)) { $Message = $DestinationDirectory }
+        $SourceDirectory = $null
+        $DestinationDirectory = $null
+    }
+
+    # -------------------------------
     # Handle 'repo-parent' mode (Batch Mode)
     # -------------------------------
     if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
@@ -115,7 +127,7 @@ try {
             }
 
             $repoDest = Join-Path $rootDest $repo.Name
-            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel
+            & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
         }
 
@@ -160,6 +172,11 @@ try {
         -replace ':', '.' `
         -replace '/', '-' `
         -replace '\\', '-'
+
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $safeMessage = $Message -replace '[\\/:*?"<>|]', ''
+        $timestamp = "$timestamp - $safeMessage"
+    }
 
     $backupRoot = Join-Path $DestinationDirectory $timestamp
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
