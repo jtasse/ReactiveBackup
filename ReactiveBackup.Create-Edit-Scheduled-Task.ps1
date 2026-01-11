@@ -32,12 +32,24 @@ try {
     $defaultConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.config'
     $actualConfigPath  = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
 
+    function Get-JsonConfig {
+        param([string]$Path)
+        $content = Get-Content $Path -Raw -Encoding UTF8
+        try {
+            return $content | ConvertFrom-Json
+        } catch {
+            # Fix unescaped backslashes: \ not preceded by \ and not followed by \ or "
+            $fixed = $content -replace '(?<!\\)\\(?!["\\])', '\\'
+            return $fixed | ConvertFrom-Json
+        }
+    }
+
     # Load default config first
-    $config = (Get-Content $defaultConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+    $config = Get-JsonConfig -Path $defaultConfigPath
 
     if (Test-Path $actualConfigPath) {
         try {
-            $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            $actualConfig = Get-JsonConfig -Path $actualConfigPath
             if (-not $actualConfig.checkForCodeChangesIntervalMinutes) { throw "Missing required key: checkForCodeChangesIntervalMinutes" }
             $config = $actualConfig
         }

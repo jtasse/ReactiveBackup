@@ -140,13 +140,25 @@ function Invoke-BackupCycle {
         throw "Config file not found at $defaultConfigPath"
     }
 
+    function Get-JsonConfig {
+        param([string]$Path)
+        $content = Get-Content $Path -Raw -Encoding UTF8
+        try {
+            return $content | ConvertFrom-Json
+        } catch {
+            # Fix unescaped backslashes: \ not preceded by \ and not followed by \ or "
+            $fixed = $content -replace '(?<!\\)\\(?!["\\])', '\\'
+            return $fixed | ConvertFrom-Json
+        }
+    }
+
     # Load default config first
-    $config = Get-Content $defaultConfigPath | ConvertFrom-Json
+    $config = Get-JsonConfig -Path $defaultConfigPath
 
     $actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
     if (Test-Path $actualConfigPath) {
         try {
-            $actualConfig = (Get-Content $actualConfigPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            $actualConfig = Get-JsonConfig -Path $actualConfigPath
             if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }

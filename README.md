@@ -7,6 +7,9 @@
   - [MacOS](#macos)
   - [Linux](#linux)
 - **[Configuration](#configuration)**
+  - [Overriding the Default Config](#overriding-the-default-config)
+  - [Syntax for drive letter paths](#syntax-for-drive-letter-paths)
+  - [Settings](#settings)
 - [Backup Output Structure](#backup-output-structure)
 - [Logging](#logging)
 - **[Usage](#usage)**
@@ -87,7 +90,25 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
 
 # Configuration
 
-Configuration is handled via `ReactiveBackup.config` at the root of the repo. You can also create a `ReactiveBackup.actual.config` file in the same directory to override the configuration locally (note: this file replaces the default config entirely, so ensure all required keys are present). Key settings:
+Configuration is handled via `ReactiveBackup.config` at the root of the repo.
+
+## Overriding the Default Config
+
+You can also create a `ReactiveBackup.actual.config` file in the same directory to override the configuration locally. This file replaces the default config entirely, so ensure all required keys are present.
+
+> **Example use case**: you want to submit a pull request for this solution but would like to continue testing using your own configuration)
+
+## Syntax for drive letter paths
+
+For settings involving drive letter paths, you may use any of the following syntaxes:
+
+| Syntax        | Example           |
+| ------------- | ----------------- |
+| Escaped       | `C:\\dev\\github` |
+| Unescaped     | `C:\dev\github`   |
+| Forward Slash | `C:/dev/github`   |
+
+## Settings
 
 | Setting                              | Description                                                                                                                                                                                                                                                                                                  |
 | :----------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -96,7 +117,7 @@ Configuration is handled via `ReactiveBackup.config` at the root of the repo. Yo
 | `backupLevel`                        | Determines the scope of the backup.<br>• "repo" (default): Treats `rootCodeDirectory` as a single repository.<br>• "repo-parent": Treats `rootCodeDirectory` as a parent folder containing multiple repositories.                                                                                            |
 | `includeRootFiles`                   | Indicates whether files directly in the root of your target folder will be backed up. Defaults to true.                                                                                                                                                                                                      |
 | `includedRepoSubfolders`             | This takes an array of 0 to n subfolders (of your rootCodeDirectory) that you would like to back up. Any subfolders not in this list will be ignored.<br>> **NOTE**: specify only the folder names here (e.g. - ["src", "test"] and NOT ["C:\\dev\\github\\my-repo\\src", "C:\\dev\\github\\my-repo\\test"]) |
-| `excludedRepoSubfolders`             | Array of subfolders to exclude from the backup.                                                                                                                                                                                                                                                              |
+| `excludedRepoSubfolders`             | Array of subfolders to exclude from the backup. (Ignored if `includedRepoSubfolders` is populated).                                                                                                                                                                                                          |
 | `includedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to include.                                                                                                                                                                                                                        |
 | `excludedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to exclude.                                                                                                                                                                                                                        |
 | `checkForCodeChangesIntervalMinutes` | The time interval (in minutes) at which the solution will check whether it is time to make a backup.<br>> **NOTE**: use the JSON number syntax of `15` and NOT "15"                                                                                                                                          |
@@ -157,7 +178,7 @@ For example, if you made a backup call to `.\ReactiveBackup.ps1` at 11:42AM on 0
 
 ### Modifying Default Behavior
 
-By default, the uses the settings in `ReactiveBackup.config`. You can also override these settings using parameters:
+By default, the script uses the settings in `ReactiveBackup.config`. You can also override these settings using parameters:
 
 ```powershell
 .\ReactiveBackup.ps1 -SourceDirectory "C:\MyCode" -DestinationDirectory "D:\Backups" -LogLevel "Info"
