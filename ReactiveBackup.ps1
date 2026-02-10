@@ -11,11 +11,24 @@ param(
     [string]$TimestampFormat,
     [string]$LogLevel,
     [Alias('m')]
-    [string]$Message
+    [string]$Message,
+    [Alias('r')]
+    [object[]]$SpecifiedRepositories
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Convert $SpecifiedRepositories from array to string format if it came as array
+# This allows syntax like: -r [jtt, 'apple cinnamon'] to work
+if ($SpecifiedRepositories -and $SpecifiedRepositories.Count -gt 0) {
+    # If it's an array (from PowerShell parsing [jtt, 'apple cinnamon']), join with commas
+    if ($SpecifiedRepositories.Count -gt 1 -or $SpecifiedRepositories -is [array]) {
+        $SpecifiedRepositories = $SpecifiedRepositories -join ', '
+    } else {
+        $SpecifiedRepositories = $SpecifiedRepositories[0].ToString()
+    }
+}
 
 $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
 $backupSucceeded = $false
@@ -23,7 +36,50 @@ $backupRoot = $null
 $isBatchMode = $false
 $repoName = "Unknown Repo"
 
-# -------------------------------
+# Parse -r parameter into array of repo names
+function Parse-RepositoryList {
+    param([string]$RepositoryInput)
+    
+    if ([string]::IsNullOrWhiteSpace($RepositoryInput)) {
+        return @()
+    }
+    
+    $input = $RepositoryInput.Trim()
+    
+    # Remove outer brackets if present: [repo1, repo2] -> repo1, repo2
+    if ($input -match '^\[(.*)\]$') {
+        $input = $matches[1].Trim()
+    }
+    
+    $repos = @()
+    
+    # Split by comma and process each entry
+    $parts = $input -split ','
+    
+    foreach ($part in $parts) {
+        $part = $part.Trim()
+        
+        if ([string]::IsNullOrEmpty($part)) {
+            continue
+        }
+        
+        # Handle quoted strings (remove surrounding quotes)
+        if ($part -match '^"(.+)"$') {
+            $part = $matches[1]
+        }
+        elseif ($part -match "^'(.+)'$") {
+            $part = $matches[1]
+        }
+        
+        $part = $part.Trim()
+        if ($part) {
+            $repos += $part
+        }
+    }
+    
+    return ,$repos
+}
+
 # Centralized Solution Logging
 # -------------------------------
 function Write-SolutionLog {
@@ -119,17 +175,32 @@ try {
         }
 
         $allRepos = Get-ChildItem -Path $rootSrc -Directory
-        $repos = @()
+        $reposToProcess = @()
 
-        if ($inclFolders -and $inclFolders.Count -gt 0) {
-            $repos = $allRepos | Where-Object { $inclFolders -contains $_.Name }
+        # Determine which repos to process based on -r parameter or config
+        if (-not [string]::IsNullOrWhiteSpace($SpecifiedRepositories)) {
+            # User specified repos with -r parameter - parse the input string
+            $repoNames = Parse-RepositoryList -RepositoryInput $SpecifiedRepositories
+            Write-Host "Selected repos from '-r' parameter: $($repoNames -join ', ')" -ForegroundColor Cyan
+            foreach ($name in $repoNames) {
+                $found = $allRepos | Where-Object { $_.Name -eq $name }
+                if ($found) {
+                    $reposToProcess += $found
+                } else {
+                    Write-Host "Warning: Repository '$name' not found in $rootSrc" -ForegroundColor Yellow
+                }
+            }
+        } elseif ($inclFolders -and @($inclFolders).Count -gt 0) {
+            # Include list specified: only backup those repos
+            $reposToProcess = $allRepos | Where-Object { $inclFolders -contains $_.Name }
         } else {
-            $repos = $allRepos | Where-Object { $exclFolders -notcontains $_.Name }
+            # No specific list: backup all except excluded
+            $reposToProcess = $allRepos | Where-Object { $exclFolders -notcontains $_.Name }
         }
         
         $anyFailure = $false
 
-        foreach ($repo in $repos) {
+        foreach ($repo in $reposToProcess) {
             $normRepo = $repo.FullName.TrimEnd('\', '/')
             $normBackup = $rootDest.TrimEnd('\', '/')
             

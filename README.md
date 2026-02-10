@@ -184,6 +184,44 @@ By default, the script uses the settings in `ReactiveBackup.config`. You can als
 .\ReactiveBackup.ps1 -SourceDirectory "C:\MyCode" -DestinationDirectory "D:\Backups" -LogLevel "Info"
 ```
 
+### Specifying Repositories to Back Up (OPTIONAL - repo-parent mode only)
+
+When using `repo-parent` backup mode, you can optionally specify which repositories to back up using the `-r` or `--repos` parameter. This is particularly useful when providing a backup message that is specific to one or more repositories.
+
+#### Supported Syntax Options
+
+| Use Case                   | Syntax                             | Example                                                     |
+| -------------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| Single repository          | `-r <repo>`                        | `.\ReactiveBackup.ps1 -r jtt`                               |
+| Multiple repos (clean)     | `-r <repo1>, <repo2>, ...`         | `.\ReactiveBackup.ps1 -r jtt, animated-logo`                |
+| Repos with spaces in names | `-r <repo1>, "<repo with spaces>"` | `.\ReactiveBackup.ps1 -r jtt, "apple cinnamon"`             |
+| Bracket syntax (flexible)  | `-r '[<repo1>, "<repo>"]'`         | `.\ReactiveBackup.ps1 -r '[jtt, "apple cinnamon"]'`         |
+| Quoted list                | `-r '<repo1>, <repo2>, ...'`       | `.\ReactiveBackup.ps1 -r 'jtt, animated-logo'`              |
+| With message               | `-r <repos> -m "<message>"`        | `.\ReactiveBackup.ps1 -r jtt, animated-logo -m "Feature X"` |
+
+#### Recommendations
+
+- **Best for most cases**: Use PowerShell array syntax without brackets
+  ```powershell
+  .\ReactiveBackup.ps1 -r jtt, animated-logo -m "Your message"
+  ```
+- **For repos with spaces**: Quote individual repo names
+
+  ```powershell
+  .\ReactiveBackup.ps1 -r jtt, "apple cinnamon", "user dashboard"
+  ```
+
+- **Alternative with bracket syntax**: Quote the entire value
+  ```powershell
+  .\ReactiveBackup.ps1 -r '[jtt, "apple cinnamon"]'
+  ```
+
+#### Behavior
+
+- Only the specified repositories are backed up (config `includedRepoFolders` and `excludedRepoFolders` are ignored)
+- Non-existent repositories are skipped with a warning message
+- Repository names are case-sensitive and matched exactly against directory names
+
 ## Running Backups Conditionally
 
 If you want to conditionally (i.e. - based on the `checkForCodeChangesIntervalMinutes` setting) run one or more backups, you can execute the `ReactiveBackup.EvaluateAndRun.ps1` script.

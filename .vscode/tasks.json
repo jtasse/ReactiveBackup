@@ -1,0 +1,105 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Test: Parse-RepositoryList Function",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-File",
+                "C:/dev/github/ReactiveBackup/test-parse.ps1"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "new"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Test: Single repo -r jtt",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "cd 'C:/dev/github/ReactiveBackup'; Write-Host 'Running: .\\ReactiveBackup.ps1 -r jtt -m Test' -ForegroundColor Cyan; &'./ReactiveBackup.ps1' -r 'jtt' -m 'Test single repo'"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "Test: Multiple repos -r 'jtt, aardvark'",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "cd 'C:/dev/github/ReactiveBackup'; Write-Host 'Running: .\\ReactiveBackup.ps1 -r \"jtt, aardvark\" -m Test' -ForegroundColor Cyan; &'./ReactiveBackup.ps1' -r 'jtt, aardvark' -m 'Test multiple repos'"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "Test: Bracket syntax -r '[jtt, aardvark]'",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "cd 'C:/dev/github/ReactiveBackup'; Write-Host 'Running: .\\ReactiveBackup.ps1 -r [jtt, aardvark] -m Test' -ForegroundColor Cyan; &'./ReactiveBackup.ps1' -r '[jtt, aardvark]' -m 'Test bracket syntax'"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "Test: Quoted name -r '[jtt, \"apple cinnamon\"]'",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "cd 'C:/dev/github/ReactiveBackup'; Write-Host 'Running: .\\ReactiveBackup.ps1 -r [jtt, \"apple cinnamon\"] -m Test' -ForegroundColor Cyan; &'./ReactiveBackup.ps1' -r '[jtt, \"apple cinnamon\"]' -m 'Test quoted name'"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            }
+        }
+    ]
+}
