@@ -309,17 +309,17 @@ try {
         if ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0) {
             # --- INCLUSION MODE ---
             if ($IncludeRootFiles) {
-                $filesToBackup += Get-ChildItem -Path $SourceDirectory -File -ErrorAction SilentlyContinue
+                $filesToBackup += Get-ChildItem -Path $SourceDirectory -File -Force -ErrorAction SilentlyContinue
             }
             foreach ($sub in $IncludedRepoSubfolders) {
                 $subPath = Join-Path $SourceDirectory $sub
                 if (Test-Path $subPath) {
-                    $filesToBackup += Get-ChildItem -Path $subPath -Recurse -File -ErrorAction SilentlyContinue
+                    $filesToBackup += Get-ChildItem -Path $subPath -Recurse -File -Force -ErrorAction SilentlyContinue
                 }
             }
         } else {
             # --- EXCLUSION / DEFAULT MODE ---
-            $filesToBackup = Get-ChildItem -Path $SourceDirectory -Recurse -File
+            $filesToBackup = Get-ChildItem -Path $SourceDirectory -Recurse -File -Force -ErrorAction SilentlyContinue
         }
 
         $allFiles = @($filesToBackup | ForEach-Object {
@@ -358,14 +358,18 @@ try {
         $relPath = $file.Name # Default for error logging
         try {
             $relPath = $file.FullName.Substring($SourceDirectory.Length).TrimStart('\', '/')
+            $normalizedRelPath = ($relPath -replace '\\', '/').Trim('/')
             
             # Check exclusions (Only if NOT in inclusion mode)
             if (-not ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0)) {
                 $shouldExclude = $false
                 foreach ($ex in $ExcludedRepoSubfolders) {
-                    # Normalize exclusion path separators to match OS
-                    $pattern = [regex]::Escape($ex.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
-                    if ($file.FullName -match "\\$pattern\\") {
+                    $segment = ($ex -replace '\\', '/').Trim('/')
+                    if ([string]::IsNullOrWhiteSpace($segment)) {
+                        continue
+                    }
+
+                    if ($normalizedRelPath -eq $segment -or $normalizedRelPath.StartsWith($segment + '/') -or $normalizedRelPath.Contains('/' + $segment + '/')) {
                         $shouldExclude = $true
                         break
                     }
@@ -375,7 +379,7 @@ try {
 
                 # Check root file inclusion (Only needed in exclusion mode, 
                 # as inclusion mode explicitly adds root files if requested)
-                if (-not $IncludeRootFiles -and -not $relPath.Contains('\')) {
+                if (-not $IncludeRootFiles -and $normalizedRelPath.IndexOf('/') -lt 0) {
                     continue
                 }
             }
