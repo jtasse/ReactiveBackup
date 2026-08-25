@@ -238,6 +238,14 @@ This script has 2 modes: `Run Once` and `Run Continuously`:
 
 To run the script only once, enter `1` to have the script check the configured `checkForCodeChangesIntervalMinutes` and run a backup conditionally based on that value.
 
+You can also invoke the script directly in one-shot mode:
+
+```powershell
+./ReactiveBackup.EvaluateAndRun.ps1 -Once
+```
+
+This mode is useful for cron jobs and CI/test automation.
+
 ### Run Continuously
 
 Enter `2` at the prompt to put the script in a mode that will run scheduled backups continuously based on the configuration (including `checkForCodeChangesIntervalMinutes`).
@@ -259,7 +267,7 @@ For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps
    - If the task does not exist, you will be asked if you want to create it.
    - If the task exists, you can choose to **Start**, **Stop**, or **Delete** it.
 
-The scheduled task runs `ReactiveBackup.EvaluateAndRun.ps1` in the background at the configured interval defined in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one.
+The scheduled task runs `ReactiveBackup.EvaluateAndRun.ps1` in the background at the configured interval defined in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
 
 # Reporting Issues
 

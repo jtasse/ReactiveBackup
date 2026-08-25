@@ -2,6 +2,25 @@
 
 ## Quick Test: Parse-RepositoryList Function
 
+## Change Detection Tests
+
+The repository includes a dedicated regression suite for created/deleted file detection and Linux-safe exclusions:
+
+```powershell
+pwsh ./test-change-detection.ps1
+```
+
+This validates:
+
+- unchanged repos do not trigger a backup
+- created files trigger backups
+- preserved-mtime copies still trigger backups
+- deleted files trigger backups
+- modified files still trigger backups
+- `.env` is visible and backed up
+- `.git` and `node_modules` stay excluded
+- `.github` is still backed up
+
 The Parse-RepositoryList function handles all input parsing for the `-r` parameter. To test this function in isolation:
 
 ### Using VS Code Tasks
