@@ -1,4 +1,4 @@
-param([switch]$ScheduledTask)
+param([switch]$ScheduledTask, [switch]$Once)
 
 # ReactiveBackup.EvaluateAndRun.ps1
 Set-StrictMode -Version Latest
@@ -31,8 +31,98 @@ function Write-Log {
     }
 }
 
-# --- Get last backup time ---
-function Get-LastBackupTime {
+function Get-NormalizedRelativePath {
+    param(
+        [string]$Path,
+        [string]$Root
+    )
+
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $relative = $pathFull.Substring($rootFull.Length).TrimStart('\', '/')
+    return ($relative -replace '\\', '/').Trim('/')
+}
+
+function Test-RelativePathExcluded {
+    param(
+        [string]$RelativePath,
+        [string[]]$ExcludedSegments
+    )
+
+    $normalized = ($RelativePath -replace '\\', '/').Trim('/')
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return $false
+    }
+
+    foreach ($ex in $ExcludedSegments) {
+        $segment = ($ex -replace '\\', '/').Trim('/')
+        if ([string]::IsNullOrWhiteSpace($segment)) {
+            continue
+        }
+
+        if ($normalized -eq $segment) {
+            return $true
+        }
+
+        if ($normalized.StartsWith($segment + '/')) {
+            return $true
+        }
+
+        if ($normalized.Contains('/' + $segment + '/')) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-RelativePathSet {
+    param(
+        [string]$Root,
+        [string[]]$IncludedRepoSubfolders,
+        [string[]]$ExcludedRepoSubfolders,
+        [bool]$IncludeRootFiles
+    )
+
+    $files = @()
+
+    if ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0) {
+        if ($IncludeRootFiles) {
+            $files += Get-ChildItem -Path $Root -File -Force -ErrorAction SilentlyContinue
+        }
+
+        foreach ($sub in $IncludedRepoSubfolders) {
+            $subPath = Join-Path $Root $sub
+            if (Test-Path $subPath) {
+                $files += Get-ChildItem -Path $subPath -Recurse -File -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    else {
+        $files = @(Get-ChildItem -Path $Root -Recurse -File -Force -ErrorAction SilentlyContinue)
+    }
+
+    $relativePaths = @()
+    foreach ($file in $files) {
+        $relativePath = Get-NormalizedRelativePath -Path $file.FullName -Root $Root
+        if (-not $IncludeRootFiles -and $relativePath.IndexOf('/') -lt 0) {
+            continue
+        }
+
+        if ($ExcludedRepoSubfolders -and (Test-RelativePathExcluded -RelativePath $relativePath -ExcludedSegments $ExcludedRepoSubfolders)) {
+            continue
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($relativePath)) {
+            $relativePaths += $relativePath
+        }
+    }
+
+    return @($relativePaths | Sort-Object -Unique)
+}
+
+# --- Get last backup directory/time ---
+function Get-LastBackupDirectory {
     param (
         [string]$BackupRoot
     )
@@ -41,17 +131,53 @@ function Get-LastBackupTime {
         return $null
     }
 
-    $dirs = Get-ChildItem -Path $BackupRoot -Directory -ErrorAction SilentlyContinue
-    if (-not $dirs) {
+    $dirs = @(Get-ChildItem -Path $BackupRoot -Directory -ErrorAction SilentlyContinue)
+    if (-not $dirs -or $dirs.Count -eq 0) {
         return $null
     }
 
-    return ($dirs |
-        Sort-Object { $_.LastWriteTimeUtc } -Descending |
-        Select-Object -First 1
-    ).LastWriteTimeUtc
+    return ($dirs | Sort-Object { $_.LastWriteTimeUtc } -Descending | Select-Object -First 1)
 }
 
+function Get-LastBackupTime {
+    param (
+        [string]$BackupRoot
+    )
+
+    $lastBackup = Get-LastBackupDirectory -BackupRoot $BackupRoot
+    if (-not $lastBackup) {
+        return $null
+    }
+
+    return $lastBackup.LastWriteTimeUtc
+}
+
+function Get-InventoryChange {
+    param(
+        [string]$RepoPath,
+        [string]$BackupRoot,
+        [string[]]$IncludedRepoSubfolders,
+        [string[]]$ExcludedRepoSubfolders,
+        [bool]$IncludeRootFiles
+    )
+
+    if (-not (Test-Path $BackupRoot)) {
+        return $false
+    }
+
+    $currentSet = @(Get-RelativePathSet -Root $RepoPath -IncludedRepoSubfolders $IncludedRepoSubfolders -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $IncludeRootFiles)
+    $backupSet = @()
+
+    if (Test-Path $BackupRoot) {
+        $backupSet = @(Get-RelativePathSet -Root $BackupRoot -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $true)
+    }
+
+    if ($currentSet.Count -ne $backupSet.Count) {
+        return $true
+    }
+
+    return @(Compare-Object -ReferenceObject $currentSet -DifferenceObject $backupSet).Count -gt 0
+}
 
 # --- Get tracked files ---
 function Get-TrackedFiles {
@@ -66,24 +192,22 @@ function Get-TrackedFiles {
     $spinIdx = 0
     $count = 0
     
-    # Initial spinner
     Write-Host $spinner[0] -NoNewline
 
     $files = @()
 
     if ($IncludedRepoSubfolders -and $IncludedRepoSubfolders.Count -gt 0) {
-        # --- INCLUSION MODE ---
         $candidates = @()
         if ($IncludeRootFiles) {
-            $candidates += Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue
+            $candidates += Get-ChildItem -Path $Root -File -Force -ErrorAction SilentlyContinue
         }
         foreach ($sub in $IncludedRepoSubfolders) {
             $path = Join-Path $Root $sub
             if (Test-Path $path) {
-                $candidates += Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
+                $candidates += Get-ChildItem -Path $path -Recurse -File -Force -ErrorAction SilentlyContinue
             }
         }
-        
+
         $files = @($candidates | ForEach-Object {
             $count++
             if ($count % 10 -eq 0) {
@@ -92,11 +216,9 @@ function Get-TrackedFiles {
             }
             $_
         })
-    } 
+    }
     else {
-        # --- EXCLUSION MODE ---
-        # Get all files recursively
-        $allFiles = @(Get-ChildItem -Path $Root -Recurse -File -Exclude $ExcludedRepoSubfolders -ErrorAction SilentlyContinue | ForEach-Object {
+        $allFiles = @(Get-ChildItem -Path $Root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
             $count++
             if ($count % 10 -eq 0) {
                 $spinIdx = ($spinIdx + 1) % 4
@@ -105,31 +227,21 @@ function Get-TrackedFiles {
             $_
         })
 
-        # Filter out exclusions
         $files = @($allFiles | Where-Object {
-            $count++
-            if ($count % 10 -eq 0) {
-                $spinIdx = ($spinIdx + 1) % 4
-                Write-Host "`b$($spinner[$spinIdx])" -NoNewline
+            $relativePath = Get-NormalizedRelativePath -Path $_.FullName -Root $Root
+            if (-not $IncludeRootFiles -and $relativePath.IndexOf('/') -lt 0) {
+                return $false
             }
 
-            $path = $_.FullName
-            $shouldExclude = $false
-            
-            foreach ($ex in $ExcludedRepoSubfolders) {
-                $pattern = [regex]::Escape($ex)
-                if ($path -match "\\$pattern\\") {
-                    $shouldExclude = $true
-                    break
-                }
+            if (Test-RelativePathExcluded -RelativePath $relativePath -ExcludedSegments $ExcludedRepoSubfolders) {
+                return $false
             }
-            -not $shouldExclude
+
+            return $true
         })
     }
 
-    # Clear spinner
     Write-Host "`b " -NoNewline
-
     return $files
 }
 
@@ -227,7 +339,6 @@ function Invoke-BackupCycle {
         $repoName = $repo.Name
         $repoPath = $repo.FullName
         
-        # Skip the backup directory if it is found within the source directories
         $normRepo      = $repoPath.TrimEnd('\', '/')
         $normBackup    = $rootBackupDirectory.TrimEnd('\', '/')
         $backupDirName = Split-Path $normBackup -Leaf
@@ -240,7 +351,6 @@ function Invoke-BackupCycle {
             continue
         }
 
-        # Determine backup destination for this repo
         $repoBackupPath = Join-Path $rootBackupDirectory $repoName
 
         if (-not (Test-Path $repoBackupPath)) {
@@ -250,34 +360,52 @@ function Invoke-BackupCycle {
         Write-Log "Checking repo: $repoName"
         Write-Host "Checking repo: $repoName... " -NoNewline
 
-        $lastBackupTime = Get-LastBackupTime -BackupRoot $repoBackupPath
+        $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $repoBackupPath
+        $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.LastWriteTimeUtc } else { $null }
         
         try {
             $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
-            Write-Host "" # Newline after spinner
+            Write-Host "" 
         } catch {
-            Write-Host "" # Newline after error
+            Write-Host ""
             Write-Log "  Error scanning repo $repoName : $($_.Exception.Message)" -Level Error
             Write-Host "Error scanning repo $repoName : $($_.Exception.Message)" -ForegroundColor Red
             continue
         }
 
+        $shouldBackup = $false
+
         if (-not $trackedFiles) {
-            Write-Log "  No tracked files found in $repoName."
-            Write-Host "No tracked files found in $repoName."
-            continue
+            if ($lastBackupDirectory) {
+                Write-Log "  Repo has no tracked files and a prior backup exists. Deletion detected. Backup required."
+                Write-Host "Repository has no tracked files; deletion detected. Backup required."
+                $shouldBackup = $true
+            } else {
+                Write-Log "  No tracked files found in $repoName and no prior backup exists."
+                Write-Host "No tracked files found in $repoName."
+            }
+        } else {
+            $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+
+            if (-not $lastBackupTime) {
+                Write-Log "  No prior backup found. Backup required."
+                $shouldBackup = $true
+            } elseif ($latestFileChange -gt $lastBackupTime) {
+                Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
+                $shouldBackup = $true
+            }
         }
 
-        $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+        if (-not $shouldBackup -and $lastBackupDirectory) {
+            $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
+            $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            if ($inventoryChanged) {
+                Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
+                $shouldBackup = $true
+            }
+        }
 
-        $shouldBackup = $false
-        if (-not $lastBackupTime) {
-            Write-Log "  No prior backup found. Backup required."
-            $shouldBackup = $true
-        } elseif ($latestFileChange -gt $lastBackupTime) {
-            Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
-            $shouldBackup = $true
-        } else {
+        if (-not $shouldBackup) {
             Write-Log "  No changes detected."
             Write-Host "No changes detected."
         }
@@ -298,7 +426,9 @@ function Invoke-BackupCycle {
 
 if ($ScheduledTask) {
     Invoke-BackupCycle *>$null
-} else {
+} elseif ($Once) {
+    Invoke-BackupCycle | Out-Null
+} elseif ($MyInvocation.InvocationName -ne '.') {
     Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
     Write-Host "--------------------------"
     Write-Host "1. Run Once"
