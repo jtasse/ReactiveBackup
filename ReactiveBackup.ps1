@@ -158,6 +158,7 @@ try {
     # -------------------------------
     if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
         Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
+        Write-Host ""
         $isBatchMode = $true
         
         $rootSrc = Resolve-ReactiveBackupPath -Path $config.rootCodeDirectory -BasePath $PSScriptRoot
@@ -191,6 +192,7 @@ try {
                     Write-Host "Warning: Repository '$name' not found in $rootSrc" -ForegroundColor Yellow
                 }
             }
+            Write-Host ""
         } elseif ($inclFolders -and @($inclFolders).Count -gt 0) {
             # Include list specified: only backup those repos
             $reposToProcess = $allRepos | Where-Object { $inclFolders -contains $_.Name }
@@ -206,13 +208,17 @@ try {
             $normBackup = $rootDest.TrimEnd('\', '/')
             
             if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
-                Write-Host "Skipping backup directory: $($repo.Name)"
+                Write-Host "Skipping backup directory: $($repo.Name)" -ForegroundColor Gray
+                Write-Host ""
                 continue
             }
 
+            Write-Host "Backing up: " -NoNewline
+            Write-Host $repo.Name -ForegroundColor Cyan
             $repoDest = Join-Path $rootDest $repo.Name
             & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
+            Write-Host ""
         }
 
         $backupSucceeded = (-not $anyFailure)
@@ -256,6 +262,11 @@ try {
     }
 
     $repoName = Split-Path $SourceDirectory.TrimEnd('\', '/') -Leaf
+
+    if (-not $script:IsNestedInvocation) {
+        Write-Host "Backing up: " -NoNewline
+        Write-Host $repoName -ForegroundColor Cyan
+    }
 
     # -------------------------------
     # Generate Windows-safe timestamp
@@ -357,7 +368,7 @@ try {
         }
         exit 1
     }
-    Write-Host "`r$prepareMsg Found $($allFiles.Count) files."
+    Write-Host "`r$prepareMsg Found $($allFiles.Count) files." -ForegroundColor Gray
     $anyFileError = $false
     
     # Progress spinner setup
@@ -435,7 +446,7 @@ try {
     }
 
     # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
-    Write-Host "`r$progressMsg Done.  "
+    Write-Host "`r$progressMsg Done.  " -ForegroundColor Gray
 
     if (-not $anyFileError) {
         Write-BackupLog "$repoName Backup completed successfully."
@@ -457,10 +468,10 @@ catch {
     }
 }
 finally {
+    Write-Host ""
     if ($backupSucceeded) {
         if ($isBatchMode) {
-            Write-Host ""
-            Write-Host "Repository backups completed"
+            Write-Host "Repository backups completed" -ForegroundColor Green
         }
         else {
             Write-Host "$repoName backup successful" -ForegroundColor Green

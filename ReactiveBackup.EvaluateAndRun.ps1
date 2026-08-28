@@ -338,9 +338,11 @@ function Invoke-BackupCycle {
     if (-not $reposToCheck -or @($reposToCheck).Count -eq 0) {
         Write-Log "No repositories found to check under $rootCodeDirectory" -Level Error
         Write-Host "No repositories found to check under $rootCodeDirectory" -ForegroundColor Yellow
+        Write-Host ""
     }
 
     foreach ($repo in $reposToCheck) {
+        try {
         $repoName = $repo.Name
         $repoPath = $repo.FullName
         
@@ -352,7 +354,7 @@ function Invoke-BackupCycle {
 
         if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
             Write-Log "Skipping backup directory: $repoName"
-            Write-Host "Skipping backup directory: $repoName"
+            Write-Host "Skipping backup directory: $repoName" -ForegroundColor Gray
             continue
         }
 
@@ -363,7 +365,9 @@ function Invoke-BackupCycle {
         }
 
         Write-Log "Checking repo: $repoName"
-        Write-Host "Checking repo: $repoName... " -NoNewline
+        Write-Host "Checking repo: " -NoNewline
+        Write-Host $repoName -ForegroundColor Cyan -NoNewline
+        Write-Host "... " -NoNewline
 
         $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $repoBackupPath
         $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.LastWriteTimeUtc } else { $null }
@@ -383,11 +387,11 @@ function Invoke-BackupCycle {
         if (-not $trackedFiles) {
             if ($lastBackupDirectory) {
                 Write-Log "  Repo has no tracked files and a prior backup exists. Deletion detected. Backup required."
-                Write-Host "Repository has no tracked files; deletion detected. Backup required."
+                Write-Host "Repository has no tracked files; deletion detected. Backup required." -ForegroundColor Yellow
                 $shouldBackup = $true
             } else {
                 Write-Log "  No tracked files found in $repoName and no prior backup exists."
-                Write-Host "No tracked files found in $repoName."
+                Write-Host "No tracked files found in $repoName." -ForegroundColor Gray
             }
         } else {
             $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
@@ -412,11 +416,11 @@ function Invoke-BackupCycle {
 
         if (-not $shouldBackup) {
             Write-Log "  No changes detected."
-            Write-Host "No changes detected."
+            Write-Host "No changes detected." -ForegroundColor Gray
         }
 
         if ($shouldBackup) {
-            Write-Host "Running backup for $repoName..."
+            Write-Host "Running backup for $repoName..." -ForegroundColor Cyan
             & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
             $backupExitCode = $LASTEXITCODE
             if ($null -eq $backupExitCode) {
@@ -427,6 +431,10 @@ function Invoke-BackupCycle {
             } else {
                 Write-Log "  $repoName backup failed." -Level Error
             }
+        }
+        }
+        finally {
+            Write-Host ""
         }
     }
 
@@ -447,6 +455,7 @@ if ($ScheduledTask) {
     $interactive = Test-ReactiveBackupInteractive
     if (-not $interactive) {
         Write-Host "No interactive terminal detected; running once." -ForegroundColor Yellow
+        Write-Host ""
         Invoke-BackupCycle | Out-Null
     } else {
         Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
@@ -461,9 +470,12 @@ if ($ScheduledTask) {
             Write-Host "Input is not available; running once." -ForegroundColor Yellow
             $selection = '1'
         }
+
+        Write-Host ""
         
         if ($selection -eq '2') {
             Write-Host "Starting continuous backup mode. Press Ctrl+C to stop." -ForegroundColor Yellow
+            Write-Host ""
             $interval = 15
             while ($true) {
                 $runInterval = Invoke-BackupCycle
@@ -471,6 +483,7 @@ if ($ScheduledTask) {
                 
                 Write-Host "Current time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
                 Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
+                Write-Host ""
                 Start-Sleep -Seconds ($interval * 60)
             }
         } else {

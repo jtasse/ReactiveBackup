@@ -454,6 +454,7 @@ try {
             Write-Host '2. Manage scheduled backups'
             Write-Host '3. Both'
             $selection = Read-Host 'Select an option (1-3)'
+            Write-Host ""
             switch ($selection) {
                 '2' { $doSchedule = $true }
                 '3' { $doShortcuts = $true; $doSchedule = $true }

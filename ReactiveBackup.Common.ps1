@@ -40,14 +40,14 @@ function Get-ReactiveBackupLogCandidates {
     $paths = @()
     $paths += Join-Path (Join-Path $SolutionRoot 'logs') 'ReactiveBackup.log'
 
-    $home = $env:HOME
-    if ([string]::IsNullOrWhiteSpace($home)) {
-        $home = $env:USERPROFILE
+    $userHome = $env:HOME
+    if ([string]::IsNullOrWhiteSpace($userHome)) {
+        $userHome = $env:USERPROFILE
     }
-    if (-not [string]::IsNullOrWhiteSpace($home)) {
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
         $stateHome = $env:XDG_STATE_HOME
         if ([string]::IsNullOrWhiteSpace($stateHome)) {
-            $stateHome = Join-Path $home '.local/state'
+            $stateHome = Join-Path $userHome '.local/state'
         }
         $paths += Join-Path (Join-Path $stateHome 'ReactiveBackup') 'ReactiveBackup.log'
     }
@@ -151,16 +151,16 @@ function Resolve-ReactiveBackupPath {
     }
 
     if ($Path.StartsWith('~')) {
-        $home = $env:HOME
-        if ([string]::IsNullOrWhiteSpace($home)) {
-            $home = $env:USERPROFILE
+        $userHome = $env:HOME
+        if ([string]::IsNullOrWhiteSpace($userHome)) {
+            $userHome = $env:USERPROFILE
         }
-        if ([string]::IsNullOrWhiteSpace($home)) {
+        if ([string]::IsNullOrWhiteSpace($userHome)) {
             throw "Cannot expand '~' because HOME / USERPROFILE is not set."
         }
 
         $rest = $Path.Substring(1).TrimStart('\', '/')
-        $Path = if ($rest) { Join-Path $home $rest } else { $home }
+        $Path = if ($rest) { Join-Path $userHome $rest } else { $userHome }
     }
 
     if (-not [System.IO.Path]::IsPathRooted($Path)) {
