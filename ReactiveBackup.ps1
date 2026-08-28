@@ -19,6 +19,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ReactiveBackup.Common.ps1')
+$script:IsNestedInvocation = [bool]$MyInvocation.PSCommandPath
+$script:OriginalLocation = (Get-Location).ProviderPath
+
 # Convert $SpecifiedRepositories from array to string format if it came as array
 # This allows syntax like: -r [jtt, 'apple cinnamon'] to work
 if ($SpecifiedRepositories -and $SpecifiedRepositories.Count -gt 0) {
@@ -88,17 +92,7 @@ function Write-SolutionLog {
         [string]$Level = "Info"
     )
 
-    $shouldLog = $false
-    if ($LogLevel -eq 'info') { $shouldLog = $true }
-    elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
-
-    if ($shouldLog) {
-        $logDir = Join-Path $PSScriptRoot 'logs'
-        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
-        $logPath = Join-Path $logDir "ReactiveBackup.log"
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
-    }
+    Write-ReactiveBackupLog -Message $Message -Level $Level -LogLevel $LogLevel
 }
 
 try {
@@ -124,7 +118,7 @@ try {
     $config = Get-JsonConfig -Path $defaultConfigPath
 
     # Initialize LogLevel from default config if not provided (for potential error logging)
-    if (-not $LogLevel) { $LogLevel = $config.logLevel }
+    if (-not $LogLevel) { $LogLevel = Get-ReactiveBackupLogLevel -Config $config }
 
     if (Test-Path $actualConfigPath) {
         try {
@@ -134,7 +128,7 @@ try {
             }
             $config = $actualConfig
             # Update LogLevel from actual config if not provided as param
-            if (-not $PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel = $config.logLevel }
+            if (-not $PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel = Get-ReactiveBackupLogLevel -Config $config }
         }
         catch {
             Write-SolutionLog "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
@@ -159,8 +153,8 @@ try {
         Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
         $isBatchMode = $true
         
-        $rootSrc = $config.rootCodeDirectory
-        $rootDest = $config.rootBackupDirectory
+        $rootSrc = Resolve-ReactiveBackupPath -Path $config.rootCodeDirectory -BasePath $PSScriptRoot
+        $rootDest = Resolve-ReactiveBackupPath -Path $config.rootBackupDirectory -BasePath $PSScriptRoot
         $inclFolders = $config.includedRepoFolders
         $exclFolders = $config.excludedRepoFolders
         $inclSub = $config.includedRepoSubfolders
@@ -215,6 +209,10 @@ try {
         }
 
         $backupSucceeded = (-not $anyFailure)
+        if ($script:IsNestedInvocation) {
+            $global:LASTEXITCODE = $(if ($backupSucceeded) { 0 } else { 1 })
+            return
+        }
         if ($backupSucceeded) { exit 0 } else { exit 1 }
     }
 
@@ -233,9 +231,12 @@ try {
     if (-not $SourceDirectory) { throw "Source directory is not defined." }
     if (-not $DestinationDirectory) { throw "Destination directory is not defined." }
 
-    # Normalize paths to support forward slashes (JSON friendly) and network paths
-    $SourceDirectory = [System.IO.Path]::GetFullPath($SourceDirectory)
-    $DestinationDirectory = [System.IO.Path]::GetFullPath($DestinationDirectory)
+    # Resolve paths against the original working directory for user params,
+    # and against the solution directory for config values. Expand ~ on Unix.
+    $sourceBase = if ($PSBoundParameters.ContainsKey('SourceDirectory')) { $script:OriginalLocation } else { $PSScriptRoot }
+    $destBase = if ($PSBoundParameters.ContainsKey('DestinationDirectory')) { $script:OriginalLocation } else { $PSScriptRoot }
+    $SourceDirectory = Resolve-ReactiveBackupPath -Path $SourceDirectory -BasePath $sourceBase
+    $DestinationDirectory = Resolve-ReactiveBackupPath -Path $DestinationDirectory -BasePath $destBase
 
     if (-not (Test-Path $SourceDirectory)) {
         throw "Source directory not found: $SourceDirectory"
@@ -287,7 +288,14 @@ try {
         if ($LogLevel -eq 'info') { $shouldLog = $true }
         elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
 
-        if ($shouldLog) { Add-Content $backupLogPath $Message }
+        if ($shouldLog) {
+            try {
+                Write-ReactiveBackupFileLog -Path $backupLogPath -Message $Message
+            }
+            catch {
+                Write-Host "WARNING: Failed to write backup log: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
     }
 
     Write-BackupLog "Backup started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
@@ -334,6 +342,10 @@ try {
     catch {
         Write-Host "`r$prepareMsg - Failed" -ForegroundColor Red
         Write-SolutionLog "Error preparing backup for $SourceDirectory : $($_.Exception.Message)" -Level Error
+        if ($script:IsNestedInvocation) {
+            $global:LASTEXITCODE = 1
+            return
+        }
         exit 1
     }
     Write-Host "`r$prepareMsg Found $($allFiles.Count) files."
@@ -456,7 +468,15 @@ finally {
 }
 
 if ($backupSucceeded) {
-    exit 0
+    if ($script:IsNestedInvocation) {
+        $global:LASTEXITCODE = 0
+    } else {
+        exit 0
+    }
 } else {
-    exit 1
+    if ($script:IsNestedInvocation) {
+        $global:LASTEXITCODE = 1
+    } else {
+        exit 1
+    }
 }

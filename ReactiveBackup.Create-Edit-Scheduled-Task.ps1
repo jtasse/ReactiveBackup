@@ -2,6 +2,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ReactiveBackup.Common.ps1')
+
 $taskName = "Reactive Backup"
 
 function Write-Log {
@@ -9,20 +11,11 @@ function Write-Log {
         [string]$Message,
         [string]$Level = "Info"
     )
-    
-    $shouldLog = $false
-    $currentLogLevel = if ($config -and $config.logLevel) { $config.logLevel } else { "error" }
-    
-    if ($currentLogLevel -eq 'info') { $shouldLog = $true }
-    elseif ($currentLogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
 
-    if ($shouldLog) {
-        $logDir = Join-Path $PSScriptRoot 'logs'
-        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
-        $logPath = Join-Path $logDir "ReactiveBackup.log"
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -Path $logPath -Value "[$timestamp] [$Level] [TaskManagement] $Message"
-    }
+    $configForLog = $null
+    $configVar = Get-Variable -Name config -ErrorAction SilentlyContinue
+    if ($configVar) { $configForLog = $configVar.Value }
+    Write-ReactiveBackupLog -Message $Message -Level $Level -Prefix "[TaskManagement] " -Config $configForLog
 }
 
 try {

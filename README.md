@@ -79,13 +79,21 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
    pwsh ./ReactiveBackup.ps1
    ```
 
-   > NOTE: Ensure your `ReactiveBackup.config` uses valid Linux paths (e.g., `/home/username/code`).
+   > NOTE: Ensure your `ReactiveBackup.config` uses valid Linux paths (e.g., `/home/username/code`). Windows drive-letter paths such as `C:\dev\github` will not work and now produce a clear error instead of a silent no-op.
 
-3. **Scheduling**: The scheduled task script provided is for Windows. On Linux, use `cron`.
+3. **Desktop shortcuts (Ubuntu / GNOME)**: GUI launchers do not load your shell `PATH`, and they often start with `$HOME` or `/` as the working directory. Create launchers that use an absolute `pwsh` path and stay open after the script finishes:
+
+   ```bash
+   pwsh ./ReactiveBackup.Create-Desktop-Shortcuts.ps1
+   ```
+
+   That writes `.desktop` files to `~/.local/share/applications/` and `~/Desktop`. If Ubuntu marks a Desktop icon as untrusted, right-click it and choose **Allow Launching**.
+
+4. **Scheduling**: The scheduled task script provided is for Windows. On Linux, use `cron`.
    ```bash
    crontab -e
    # Add a line to run every 15 minutes (example)
-   */15 * * * * pwsh /path/to/ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask
+   */15 * * * * env DOTNET_SYSTEM_IO_DISABLEFILELOCKING=1 /usr/bin/pwsh -NoProfile -File /path/to/ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask
    ```
 
 # Configuration
@@ -134,6 +142,8 @@ When a backup runs, it creates a folder in your `rootBackupDirectory` named with
 # Logging
 
 The solution generates logs (based on the `logLevel` setting in [configuration](#configuration)) in a `ReactiveBackup.log` file in the `logs` folder at the root of the ReactiveBackup solution directory.
+
+> **NOTE**: `logLevel` defaults to `"error"`, so informational lines are not written unless you set `"logLevel": "info"`. Logging failures are written to the console instead of aborting the backup.
 
 # Usage
 
