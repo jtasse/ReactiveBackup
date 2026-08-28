@@ -95,8 +95,8 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
 
    > **Do not wrap the shortcut in `sudo` or `pkexec`.** Ubuntu mounts removable drives at `/media/<you>/...` for your desktop user. Root is often denied on those volumes (NTFS/exFAT/FUSE). If you already ran as sudo, fix ownership and re-run as yourself:
    > ```bash
-   > sudo chown -R "$USER:$USER" ~/dev/ReactiveBackup/logs
-   > sudo chown -R "$USER:$USER" /media/$USER/<drive-label>/path/to/backups
+   > sudo chown -R "$USER:$(id -gn)" ~/dev/ReactiveBackup/logs
+   > sudo chown -R "$USER:$(id -gn)" /media/$USER/<drive-label>/path/to/backups
    > ```
    > Then recreate the shortcuts with `pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts` so `Exec` does not use sudo.
 

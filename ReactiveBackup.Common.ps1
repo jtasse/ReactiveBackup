@@ -6,6 +6,14 @@ function Test-IsUnixPlatform {
     return ([System.IO.Path]::DirectorySeparatorChar -eq '/')
 }
 
+if (Test-IsUnixPlatform) {
+    try {
+        [System.AppContext]::SetSwitch('System.IO.DisableFileLocking', $true)
+    }
+    catch {
+    }
+}
+
 function Get-ReactiveBackupLogLevel {
     param(
         $Config,
@@ -21,6 +29,30 @@ function Get-ReactiveBackupLogLevel {
     }
 
     return 'error'
+}
+
+$script:ReactiveBackupChosenLogPath = $null
+$script:ReactiveBackupLogFallbackNotified = $false
+
+function Get-ReactiveBackupLogCandidates {
+    param([string]$SolutionRoot)
+
+    $paths = @()
+    $paths += Join-Path (Join-Path $SolutionRoot 'logs') 'ReactiveBackup.log'
+
+    $home = $env:HOME
+    if ([string]::IsNullOrWhiteSpace($home)) {
+        $home = $env:USERPROFILE
+    }
+    if (-not [string]::IsNullOrWhiteSpace($home)) {
+        $stateHome = $env:XDG_STATE_HOME
+        if ([string]::IsNullOrWhiteSpace($stateHome)) {
+            $stateHome = Join-Path $home '.local/state'
+        }
+        $paths += Join-Path (Join-Path $stateHome 'ReactiveBackup') 'ReactiveBackup.log'
+    }
+
+    return $paths
 }
 
 function Write-ReactiveBackupLog {
@@ -40,39 +72,54 @@ function Write-ReactiveBackupLog {
         return
     }
 
-    $logDir = $null
-    try {
-        $solutionRoot = $null
-        if ($PSCommandPath) {
-            $solutionRoot = Split-Path -Parent $PSCommandPath
-        }
-        if ([string]::IsNullOrWhiteSpace($solutionRoot) -and $PSScriptRoot) {
-            $solutionRoot = $PSScriptRoot
-        }
-        if ([string]::IsNullOrWhiteSpace($solutionRoot)) {
-            $solutionRoot = (Get-Location).ProviderPath
-        }
-
-        $logDir = Join-Path $solutionRoot 'logs'
-        if (-not (Test-Path -LiteralPath $logDir)) {
-            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-        }
-
-        $logPath = Join-Path $logDir 'ReactiveBackup.log'
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        $line = "[$timestamp] [$Level] $Prefix$Message" + [Environment]::NewLine
-        $utf8 = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::AppendAllText($logPath, $line, $utf8)
+    $solutionRoot = $null
+    if ($PSCommandPath) {
+        $solutionRoot = Split-Path -Parent $PSCommandPath
     }
-    catch {
-        Write-Host "WARNING: Failed to write log: $($_.Exception.Message)" -ForegroundColor Yellow
-        if (Test-IsUnixPlatform) {
-            $helpPath = $null
-            if ($logDir) { $helpPath = $logDir }
-            Write-Host (Get-ReactiveBackupPermissionHelp -Path $helpPath) -ForegroundColor Yellow
-        }
-        Write-Host "[$Level] $Prefix$Message"
+    if ([string]::IsNullOrWhiteSpace($solutionRoot) -and $PSScriptRoot) {
+        $solutionRoot = $PSScriptRoot
     }
+    if ([string]::IsNullOrWhiteSpace($solutionRoot)) {
+        $solutionRoot = (Get-Location).ProviderPath
+    }
+
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$timestamp] [$Level] $Prefix$Message" + [Environment]::NewLine
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    $preferred = @(Get-ReactiveBackupLogCandidates -SolutionRoot $solutionRoot)[0]
+    $candidates = @()
+    if ($script:ReactiveBackupChosenLogPath) {
+        $candidates += $script:ReactiveBackupChosenLogPath
+    }
+    $candidates += @(Get-ReactiveBackupLogCandidates -SolutionRoot $solutionRoot)
+    $candidates = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+
+    $preferred = $candidates[0]
+    foreach ($logPath in $candidates) {
+        try {
+            $logDir = Split-Path -Parent $logPath
+            if (-not (Test-Path -LiteralPath $logDir)) {
+                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            }
+            [System.IO.File]::AppendAllText($logPath, $line, $utf8)
+            if (-not $script:ReactiveBackupChosenLogPath) {
+                $script:ReactiveBackupChosenLogPath = $logPath
+            }
+            if ($logPath -ne $preferred -and -not $script:ReactiveBackupLogFallbackNotified) {
+                $script:ReactiveBackupLogFallbackNotified = $true
+                Write-Host "Cannot write '$preferred'; logging to '$logPath' instead." -ForegroundColor Yellow
+                Write-Host (Get-ReactiveBackupPermissionHelp -Path $preferred) -ForegroundColor Yellow
+            }
+            return
+        }
+        catch {
+            continue
+        }
+    }
+
+    Write-Host "WARNING: Failed to write log to any candidate path." -ForegroundColor Yellow
+    Write-Host (Get-ReactiveBackupPermissionHelp -Path $preferred) -ForegroundColor Yellow
+    Write-Host "[$Level] $Prefix$Message"
 }
 
 function Write-ReactiveBackupFileLog {
@@ -242,6 +289,23 @@ function Get-UnixSessionUserName {
     return $null
 }
 
+function Get-UnixPrimaryGroupName {
+    if (-not (Test-IsUnixPlatform)) {
+        return $null
+    }
+
+    try {
+        $name = [string](& id -gn)
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            return $name.Trim()
+        }
+    }
+    catch {
+    }
+
+    return $null
+}
+
 function Get-ReactiveBackupPermissionHelp {
     param([string]$Path)
 
@@ -257,8 +321,10 @@ function Get-ReactiveBackupPermissionHelp {
         $lines += "Remove sudo/pkexec from the .desktop Exec line and run as $user."
     }
     else {
+        $group = Get-UnixPrimaryGroupName
+        $ownerSpec = if ($group) { "${user}:${group}" } else { $user }
         $lines += "User '$user' cannot write to '$Path'. If you previously ran with sudo, root may own the files. Fix with:"
-        $lines += "  sudo chown -R ${user}:${user} '$Path'"
+        $lines += "  sudo chown -R $ownerSpec '$Path'"
     }
 
     return ($lines -join [Environment]::NewLine)

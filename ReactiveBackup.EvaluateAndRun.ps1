@@ -11,16 +11,6 @@ if ($null -ne $relaunchCode) {
     exit $relaunchCode
 }
 
-$logFile = Join-Path (Join-Path $PSScriptRoot 'logs') 'ReactiveBackup.log'
-$logDir = Join-Path $PSScriptRoot 'logs'
-if (Test-Path -LiteralPath $logFile) {
-    Assert-ReactiveBackupWritable -Path $logFile -Purpose 'solution log file'
-} elseif (Test-Path -LiteralPath $logDir) {
-    Assert-ReactiveBackupWritable -Path $logDir -Purpose 'solution log directory'
-} else {
-    Assert-ReactiveBackupWritable -Path $PSScriptRoot -Purpose 'solution directory (for logs)'
-}
-
 function Write-Log {
     param(
         [string]$Message,
