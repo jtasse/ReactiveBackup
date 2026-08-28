@@ -6,6 +6,21 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'ReactiveBackup.Common.ps1')
 
+$relaunchCode = Invoke-ReactiveBackupRelaunchAsSessionUser -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+if ($null -ne $relaunchCode) {
+    exit $relaunchCode
+}
+
+$logFile = Join-Path (Join-Path $PSScriptRoot 'logs') 'ReactiveBackup.log'
+$logDir = Join-Path $PSScriptRoot 'logs'
+if (Test-Path -LiteralPath $logFile) {
+    Assert-ReactiveBackupWritable -Path $logFile -Purpose 'solution log file'
+} elseif (Test-Path -LiteralPath $logDir) {
+    Assert-ReactiveBackupWritable -Path $logDir -Purpose 'solution log directory'
+} else {
+    Assert-ReactiveBackupWritable -Path $PSScriptRoot -Purpose 'solution directory (for logs)'
+}
+
 function Write-Log {
     param(
         [string]$Message,
@@ -293,6 +308,8 @@ function Invoke-BackupCycle {
     if (-not (Test-Path -LiteralPath $rootCodeDirectory)) {
         throw "Source directory not found: $rootCodeDirectory"
     }
+
+    Assert-ReactiveBackupWritable -Path $rootBackupDirectory -Purpose 'backup destination'
 
     # Ensure the backup directory name is always excluded to prevent recursion
     $backupDirName = Split-Path $rootBackupDirectory -Leaf

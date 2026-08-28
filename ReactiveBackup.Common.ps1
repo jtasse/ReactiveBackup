@@ -40,6 +40,7 @@ function Write-ReactiveBackupLog {
         return
     }
 
+    $logDir = $null
     try {
         $solutionRoot = $null
         if ($PSCommandPath) {
@@ -65,6 +66,11 @@ function Write-ReactiveBackupLog {
     }
     catch {
         Write-Host "WARNING: Failed to write log: $($_.Exception.Message)" -ForegroundColor Yellow
+        if (Test-IsUnixPlatform) {
+            $helpPath = $null
+            if ($logDir) { $helpPath = $logDir }
+            Write-Host (Get-ReactiveBackupPermissionHelp -Path $helpPath) -ForegroundColor Yellow
+        }
         Write-Host "[$Level] $Prefix$Message"
     }
 }
@@ -152,4 +158,223 @@ function Get-PwshExecutablePath {
     }
 
     return $null
+}
+
+function Get-PowerShellHostPath {
+    $pwsh = Get-PwshExecutablePath
+    if ($pwsh) {
+        return $pwsh
+    }
+
+    foreach ($name in @('powershell.exe', 'powershell')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command -and $command.Source) {
+            return $command.Source
+        }
+    }
+
+    if ($env:WINDIR) {
+        $systemPs = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $systemPs) {
+            return $systemPs
+        }
+    }
+
+    return $null
+}
+
+function Get-ReactiveBackupPlatform {
+    if (-not (Test-IsUnixPlatform)) {
+        return 'windows'
+    }
+
+    $macVar = Get-Variable -Name IsMacOS -ErrorAction SilentlyContinue
+    if ($macVar -and [bool]$macVar.Value) {
+        return 'mac'
+    }
+
+    try {
+        $uname = [string](& uname -s)
+        if ($uname -eq 'Darwin') {
+            return 'mac'
+        }
+    }
+    catch {
+    }
+
+    return 'linux'
+}
+
+function Get-UnixUserId {
+    if (-not (Test-IsUnixPlatform)) {
+        return $null
+    }
+
+    try {
+        $raw = & id -u
+        if ([string]::IsNullOrWhiteSpace([string]$raw)) {
+            return $null
+        }
+        return [int]$raw
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-UnixSessionUserName {
+    if (-not [string]::IsNullOrWhiteSpace($env:SUDO_USER) -and $env:SUDO_USER -ne 'root') {
+        return $env:SUDO_USER
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:PKEXEC_UID)) {
+        try {
+            $name = & id -nu $env:PKEXEC_UID
+            if ($name -and $name -ne 'root') {
+                return [string]$name
+            }
+        }
+        catch {
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:USER) -and $env:USER -ne 'root') {
+        return $env:USER
+    }
+    return $null
+}
+
+function Get-ReactiveBackupPermissionHelp {
+    param([string]$Path)
+
+    $user = Get-UnixSessionUserName
+    if ([string]::IsNullOrWhiteSpace($user)) {
+        $user = 'YOUR_USER'
+    }
+
+    $uid = Get-UnixUserId
+    $lines = @()
+    if ($uid -eq 0) {
+        $lines += "This process is running as root. Ubuntu user mounts such as /media/$user/... (USB, NTFS, exFAT) typically allow only the desktop user, not root."
+        $lines += "Remove sudo/pkexec from the .desktop Exec line and run as $user."
+    }
+    else {
+        $lines += "User '$user' cannot write to '$Path'. If you previously ran with sudo, root may own the files. Fix with:"
+        $lines += "  sudo chown -R ${user}:${user} '$Path'"
+    }
+
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Assert-ReactiveBackupWritable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [string]$Purpose = 'path'
+    )
+
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            $stream.Dispose()
+            return
+        }
+        catch {
+            $help = Get-ReactiveBackupPermissionHelp -Path $Path
+            throw "Cannot write $Purpose at '$Path'. $($_.Exception.Message)$([Environment]::NewLine)$help"
+        }
+    }
+
+    $existing = $Path
+    while ($existing -and -not (Test-Path -LiteralPath $existing)) {
+        $parent = Split-Path -Parent $existing
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $existing) {
+            break
+        }
+        $existing = $parent
+    }
+
+    if (-not $existing -or -not (Test-Path -LiteralPath $existing)) {
+        throw "Cannot write $Purpose at '$Path' because no parent directory exists."
+    }
+
+    $probe = Join-Path $existing ('.reactivebackup-write-test-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($probe, 'ok', $utf8)
+        [System.IO.File]::Delete($probe)
+    }
+    catch {
+        $help = Get-ReactiveBackupPermissionHelp -Path $existing
+        throw "Cannot write $Purpose at '$Path'. $($_.Exception.Message)$([Environment]::NewLine)$help"
+    }
+}
+
+function Get-ReactiveBackupRelaunchArgumentList {
+    param($BoundParameters)
+
+    $list = @()
+    if (-not $BoundParameters) {
+        return $list
+    }
+
+    foreach ($key in $BoundParameters.Keys) {
+        $val = $BoundParameters[$key]
+        if ($val -is [System.Management.Automation.SwitchParameter]) {
+            if ($val.IsPresent) {
+                $list += "-$key"
+            }
+            continue
+        }
+
+        $list += "-$key"
+        if ($null -eq $val) {
+            continue
+        }
+
+        if ($val -is [array]) {
+            foreach ($item in $val) {
+                $list += [string]$item
+            }
+        }
+        else {
+            $list += [string]$val
+        }
+    }
+
+    return $list
+}
+
+function Invoke-ReactiveBackupRelaunchAsSessionUser {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+        $BoundParameters
+    )
+
+    if (-not (Test-IsUnixPlatform)) {
+        return $null
+    }
+
+    $uid = Get-UnixUserId
+    if ($uid -ne 0) {
+        return $null
+    }
+
+    $sudoUser = $env:SUDO_USER
+    if ([string]::IsNullOrWhiteSpace($sudoUser) -or $sudoUser -eq 'root') {
+        $sudoUser = Get-UnixSessionUserName
+    }
+    if ([string]::IsNullOrWhiteSpace($sudoUser) -or $sudoUser -eq 'root') {
+        Write-Host "Running as root. Ubuntu mounts under /media/<user>/ usually deny root; run this without sudo." -ForegroundColor Yellow
+        return $null
+    }
+
+    $pwsh = Get-PwshExecutablePath
+    if (-not $pwsh) {
+        $pwsh = (Get-Process -Id $PID).Path
+    }
+
+    Write-Host "Detected sudo. Re-launching as $sudoUser because root cannot write to user-mounted drives." -ForegroundColor Yellow
+    $argList = @('-NoProfile', '-File', $ScriptPath) + @(Get-ReactiveBackupRelaunchArgumentList -BoundParameters $BoundParameters)
+    & sudo -u $sudoUser --preserve-env=DOTNET_SYSTEM_IO_DISABLEFILELOCKING -- $pwsh @argList
+    return $LASTEXITCODE
 }

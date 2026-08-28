@@ -20,7 +20,7 @@
   - [Running Backups Conditionally](#running-backups-conditionally)
     - [Run Once](#run-once)
     - [Run Continuously](#run-continuously)
-    - [Running Backups via Task Scheduler (Windows only)](#running-backups-via-task-scheduler-windows-only)
+    - [Desktop shortcuts and scheduled backups](#desktop-shortcuts-and-scheduled-backups)
 - [Reporting Issues](#reporting-issues)
 
 # What Is It?
@@ -63,11 +63,15 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
 
    > NOTE: Ensure your `ReactiveBackup.config` uses valid MacOS paths (e.g., `/Users/username/code`).
 
-3. **Scheduling**: The scheduled task script provided is for Windows. On MacOS, use `cron`.
+3. **Desktop shortcuts**: Create `.command` files on your Desktop:
+
    ```bash
-   crontab -e
-   # Add a line to run every 15 minutes (example)
-   */15 * * * * pwsh /path/to/ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask
+   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
+   ```
+
+4. **Scheduling**: The same script writes a user crontab entry:
+   ```bash
+   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
    ```
 
 ## Linux
@@ -81,19 +85,24 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
 
    > NOTE: Ensure your `ReactiveBackup.config` uses valid Linux paths (e.g., `/home/username/code`). Windows drive-letter paths such as `C:\dev\github` will not work and now produce a clear error instead of a silent no-op.
 
-3. **Desktop shortcuts (Ubuntu / GNOME)**: GUI launchers do not load your shell `PATH`, and they often start with `$HOME` or `/` as the working directory. Create launchers that use an absolute `pwsh` path and stay open after the script finishes:
+3. **Desktop shortcuts**: GUI launchers do not load your shell `PATH`, and they often start with `$HOME` or `/` as the working directory. Create launchers that use an absolute `pwsh` path and stay open after the script finishes:
 
    ```bash
-   pwsh ./ReactiveBackup.Create-Desktop-Shortcuts.ps1
+   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
    ```
 
    That writes `.desktop` files to `~/.local/share/applications/` and `~/Desktop`. If Ubuntu marks a Desktop icon as untrusted, right-click it and choose **Allow Launching**.
 
-4. **Scheduling**: The scheduled task script provided is for Windows. On Linux, use `cron`.
+   > **Do not wrap the shortcut in `sudo` or `pkexec`.** Ubuntu mounts removable drives at `/media/<you>/...` for your desktop user. Root is often denied on those volumes (NTFS/exFAT/FUSE). If you already ran as sudo, fix ownership and re-run as yourself:
+   > ```bash
+   > sudo chown -R "$USER:$USER" ~/dev/ReactiveBackup/logs
+   > sudo chown -R "$USER:$USER" /media/$USER/<drive-label>/path/to/backups
+   > ```
+   > Then recreate the shortcuts with `pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts` so `Exec` does not use sudo.
+
+4. **Scheduling**: The same launcher script writes a user crontab entry from `checkForCodeChangesIntervalMinutes`:
    ```bash
-   crontab -e
-   # Add a line to run every 15 minutes (example)
-   */15 * * * * env DOTNET_SYSTEM_IO_DISABLEFILELOCKING=1 /usr/bin/pwsh -NoProfile -File /path/to/ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask
+   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
    ```
 
 # Configuration
@@ -262,22 +271,28 @@ Enter `2` at the prompt to put the script in a mode that will run scheduled back
 
 To stop this process, press enter `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
 
-### Backing up via Task Scheduler (Windows only)
+### Desktop shortcuts and scheduled backups
 
-For Windows users, you can use the `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` script to create a scheduled task.
+Use `ReactiveBackup.Create-Launchers.ps1` on Windows, Linux, and macOS:
 
-#### Creating the Scheduled Task
+```powershell
+pwsh ./ReactiveBackup.Create-Launchers.ps1
+```
 
-1. Run PowerShell as an administrator and navigate to the folder containing the ReactiveBackup solution.
-2. Run the script:
-   ```powershell
-   .\ReactiveBackup.Create-Edit-Scheduled-Task.ps1
-   ```
-3. Follow the prompts:
-   - If the task does not exist, you will be asked if you want to create it.
-   - If the task exists, you can choose to **Start**, **Stop**, or **Delete** it.
+The script prompts for:
 
-The scheduled task runs `ReactiveBackup.EvaluateAndRun.ps1` in the background at the configured interval defined in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
+1. **Desktop / start-menu shortcuts** — Windows `.lnk` files, Linux `.desktop` files, or macOS `.command` files
+2. **Scheduled backups** — Windows Task Scheduler, or a user crontab on Linux/macOS
+3. **Both**
+
+You can skip the menu:
+
+```powershell
+pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
+pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
+```
+
+On Windows, creating the scheduled task may require an elevated PowerShell session. The task (or cron entry) runs `ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask` in the background at the interval in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
 
 # Reporting Issues
 

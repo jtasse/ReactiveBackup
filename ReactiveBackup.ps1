@@ -23,6 +23,23 @@ $ErrorActionPreference = 'Stop'
 $script:IsNestedInvocation = [bool]$MyInvocation.PSCommandPath
 $script:OriginalLocation = (Get-Location).ProviderPath
 
+if (-not $script:IsNestedInvocation) {
+    $relaunchCode = Invoke-ReactiveBackupRelaunchAsSessionUser -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+    if ($null -ne $relaunchCode) {
+        exit $relaunchCode
+    }
+
+        $logFile = Join-Path (Join-Path $PSScriptRoot 'logs') 'ReactiveBackup.log'
+    $logDir = Join-Path $PSScriptRoot 'logs'
+    if (Test-Path -LiteralPath $logFile) {
+        Assert-ReactiveBackupWritable -Path $logFile -Purpose 'solution log file'
+    } elseif (Test-Path -LiteralPath $logDir) {
+        Assert-ReactiveBackupWritable -Path $logDir -Purpose 'solution log directory'
+    } else {
+        Assert-ReactiveBackupWritable -Path $PSScriptRoot -Purpose 'solution directory (for logs)'
+    }
+}
+
 # Convert $SpecifiedRepositories from array to string format if it came as array
 # This allows syntax like: -r [jtt, 'apple cinnamon'] to work
 if ($SpecifiedRepositories -and $SpecifiedRepositories.Count -gt 0) {
@@ -241,6 +258,8 @@ try {
     if (-not (Test-Path $SourceDirectory)) {
         throw "Source directory not found: $SourceDirectory"
     }
+
+    Assert-ReactiveBackupWritable -Path $DestinationDirectory -Purpose 'backup destination'
 
     if (-not (Test-Path $DestinationDirectory)) {
         New-Item -ItemType Directory -Path $DestinationDirectory | Out-Null
