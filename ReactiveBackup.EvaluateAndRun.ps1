@@ -4,31 +4,24 @@ param([switch]$ScheduledTask, [switch]$Once)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ReactiveBackup.Common.ps1')
+
+$relaunchCode = Invoke-ReactiveBackupRelaunchAsSessionUser -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+if ($null -ne $relaunchCode) {
+    exit $relaunchCode
+}
+
 function Write-Log {
     param(
         [string]$Message,
         [string]$Level = "Info"
     )
 
-    # Filter based on configured log level
-    # 'error' level: only show Error
-    # 'info' level: show Info and Error
-    $shouldLog = $false
-    $currentLogLevel = if ($config -and $config.logLevel) { $config.logLevel } else { "error" }
-
-    if ($currentLogLevel -eq 'info') { $shouldLog = $true }
-    elseif ($currentLogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
-
-    if ($shouldLog) {
-        $logDir = Join-Path $PSScriptRoot 'logs'
-        if (-not (Test-Path $logDir)) {
-            New-Item -ItemType Directory -Path $logDir | Out-Null
-        }
-        $logPath = Join-Path $logDir "ReactiveBackup.log"
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        $prefix = if ($ScheduledTask) { "[ScheduledTask] " } else { "" }
-        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $prefix$Message"
-    }
+    $prefix = if ($ScheduledTask) { "[ScheduledTask] " } else { "" }
+    $configForLog = $null
+    $configVar = Get-Variable -Name config -ErrorAction SilentlyContinue
+    if ($configVar) { $configForLog = $configVar.Value }
+    Write-ReactiveBackupLog -Message $Message -Level $Level -Prefix $prefix -Config $configForLog
 }
 
 function Get-NormalizedRelativePath {
@@ -288,7 +281,7 @@ function Invoke-BackupCycle {
 
     $rootCodeDirectory   = $config.rootCodeDirectory
     $rootBackupDirectory = $config.rootBackupDirectory
-    $logLevel            = $config.logLevel
+    $logLevel            = Get-ReactiveBackupLogLevel -Config $config
     $backupLevel         = $config.backupLevel
     $includeRootFiles    = $config.includeRootFiles
     $includedRepoFolders = $config.includedRepoFolders
@@ -297,9 +290,16 @@ function Invoke-BackupCycle {
     $excludedRepoSubfolders = $config.excludedRepoSubfolders
     $timestampFormat     = $config.timestampFormat
 
-    # Normalize paths to support forward slashes (JSON friendly) and network paths
-    $rootCodeDirectory = [System.IO.Path]::GetFullPath($rootCodeDirectory)
-    $rootBackupDirectory = [System.IO.Path]::GetFullPath($rootBackupDirectory)
+    # Resolve paths relative to the solution directory (not the process CWD).
+    # .desktop launchers often start with $HOME or / as the working directory.
+    $rootCodeDirectory = Resolve-ReactiveBackupPath -Path $rootCodeDirectory -BasePath $PSScriptRoot
+    $rootBackupDirectory = Resolve-ReactiveBackupPath -Path $rootBackupDirectory -BasePath $PSScriptRoot
+
+    if (-not (Test-Path -LiteralPath $rootCodeDirectory)) {
+        throw "Source directory not found: $rootCodeDirectory"
+    }
+
+    Assert-ReactiveBackupWritable -Path $rootBackupDirectory -Purpose 'backup destination'
 
     # Ensure the backup directory name is always excluded to prevent recursion
     $backupDirName = Split-Path $rootBackupDirectory -Leaf
@@ -307,10 +307,10 @@ function Invoke-BackupCycle {
         $excludedRepoSubfolders += $backupDirName
     }
 
-    # Default log level if missing
-    if (-not $logLevel) { $logLevel = "error" }
-    # Ensure config object has it for Write-Log to use
-    if (-not $config.PSObject.Properties.Name -contains 'logLevel') { $config | Add-Member -MemberType NoteProperty -Name 'logLevel' -Value $logLevel }
+    # Ensure config object has logLevel for Write-Log to use
+    if (-not ($config.PSObject.Properties.Name -contains 'logLevel')) {
+        $config | Add-Member -MemberType NoteProperty -Name 'logLevel' -Value $logLevel
+    }
 
     # --- Main logic ---
 
@@ -335,7 +335,14 @@ function Invoke-BackupCycle {
         }
     }
 
+    if (-not $reposToCheck -or @($reposToCheck).Count -eq 0) {
+        Write-Log "No repositories found to check under $rootCodeDirectory" -Level Error
+        Write-Host "No repositories found to check under $rootCodeDirectory" -ForegroundColor Yellow
+        Write-Host ""
+    }
+
     foreach ($repo in $reposToCheck) {
+        try {
         $repoName = $repo.Name
         $repoPath = $repo.FullName
         
@@ -347,7 +354,7 @@ function Invoke-BackupCycle {
 
         if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
             Write-Log "Skipping backup directory: $repoName"
-            Write-Host "Skipping backup directory: $repoName"
+            Write-Host "Skipping backup directory: $repoName" -ForegroundColor Gray
             continue
         }
 
@@ -358,7 +365,9 @@ function Invoke-BackupCycle {
         }
 
         Write-Log "Checking repo: $repoName"
-        Write-Host "Checking repo: $repoName... " -NoNewline
+        Write-Host "Checking repo: " -NoNewline
+        Write-Host $repoName -ForegroundColor Cyan -NoNewline
+        Write-Host "... " -NoNewline
 
         $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $repoBackupPath
         $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.LastWriteTimeUtc } else { $null }
@@ -378,11 +387,11 @@ function Invoke-BackupCycle {
         if (-not $trackedFiles) {
             if ($lastBackupDirectory) {
                 Write-Log "  Repo has no tracked files and a prior backup exists. Deletion detected. Backup required."
-                Write-Host "Repository has no tracked files; deletion detected. Backup required."
+                Write-Host "Repository has no tracked files; deletion detected. Backup required." -ForegroundColor Yellow
                 $shouldBackup = $true
             } else {
                 Write-Log "  No tracked files found in $repoName and no prior backup exists."
-                Write-Host "No tracked files found in $repoName."
+                Write-Host "No tracked files found in $repoName." -ForegroundColor Gray
             }
         } else {
             $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
@@ -407,17 +416,25 @@ function Invoke-BackupCycle {
 
         if (-not $shouldBackup) {
             Write-Log "  No changes detected."
-            Write-Host "No changes detected."
+            Write-Host "No changes detected." -ForegroundColor Gray
         }
 
         if ($shouldBackup) {
-            Write-Host "Running backup for $repoName..."
+            Write-Host "Running backup for $repoName..." -ForegroundColor Cyan
             & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            $backupExitCode = $LASTEXITCODE
+            if ($null -eq $backupExitCode) {
+                $backupExitCode = if ($?) { 0 } else { 1 }
+            }
+            if ($backupExitCode -eq 0) {
                 Write-Log "  $repoName backup successful."
             } else {
                 Write-Log "  $repoName backup failed." -Level Error
             }
+        }
+        }
+        finally {
+            Write-Host ""
         }
     }
 
@@ -425,29 +442,52 @@ function Invoke-BackupCycle {
 }
 
 if ($ScheduledTask) {
-    Invoke-BackupCycle *>$null
+    try {
+        Invoke-BackupCycle | Out-Null
+    }
+    catch {
+        Write-Log $_.Exception.ToString() -Level Error
+        throw
+    }
 } elseif ($Once) {
     Invoke-BackupCycle | Out-Null
 } elseif ($MyInvocation.InvocationName -ne '.') {
-    Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
-    Write-Host "--------------------------"
-    Write-Host "1. Run Once"
-    Write-Host "2. Run Continuously"
-    
-    $selection = Read-Host "Select an option (1-2)"
-    
-    if ($selection -eq '2') {
-        Write-Host "Starting continuous backup mode. Press Ctrl+C to stop." -ForegroundColor Yellow
-        $interval = 15
-        while ($true) {
-            $runInterval = Invoke-BackupCycle
-            if ($runInterval) { $interval = $runInterval }
-            
-            Write-Host "Current time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
-            Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
-            Start-Sleep -Seconds ($interval * 60)
-        }
-    } else {
+    $interactive = Test-ReactiveBackupInteractive
+    if (-not $interactive) {
+        Write-Host "No interactive terminal detected; running once." -ForegroundColor Yellow
+        Write-Host ""
         Invoke-BackupCycle | Out-Null
+    } else {
+        Write-Host "Reactive Backup Evaluation Script" -ForegroundColor Cyan
+        Write-Host "--------------------------"
+        Write-Host "1. Run Once"
+        Write-Host "2. Run Continuously"
+        
+        try {
+            $selection = Read-Host "Select an option (1-2)"
+        }
+        catch {
+            Write-Host "Input is not available; running once." -ForegroundColor Yellow
+            $selection = '1'
+        }
+
+        Write-Host ""
+        
+        if ($selection -eq '2') {
+            Write-Host "Starting continuous backup mode. Press Ctrl+C to stop." -ForegroundColor Yellow
+            Write-Host ""
+            $interval = 15
+            while ($true) {
+                $runInterval = Invoke-BackupCycle
+                if ($runInterval) { $interval = $runInterval }
+                
+                Write-Host "Current time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
+                Write-Host "Sleeping for $interval minutes..." -ForegroundColor Gray
+                Write-Host ""
+                Start-Sleep -Seconds ($interval * 60)
+            }
+        } else {
+            Invoke-BackupCycle | Out-Null
+        }
     }
 }

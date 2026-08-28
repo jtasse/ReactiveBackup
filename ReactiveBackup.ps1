@@ -19,6 +19,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ReactiveBackup.Common.ps1')
+$script:IsNestedInvocation = [bool]$MyInvocation.PSCommandPath
+$script:OriginalLocation = (Get-Location).ProviderPath
+
+if (-not $script:IsNestedInvocation) {
+    $relaunchCode = Invoke-ReactiveBackupRelaunchAsSessionUser -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+    if ($null -ne $relaunchCode) {
+        exit $relaunchCode
+    }
+}
+
 # Convert $SpecifiedRepositories from array to string format if it came as array
 # This allows syntax like: -r [jtt, 'apple cinnamon'] to work
 if ($SpecifiedRepositories -and $SpecifiedRepositories.Count -gt 0) {
@@ -88,17 +99,7 @@ function Write-SolutionLog {
         [string]$Level = "Info"
     )
 
-    $shouldLog = $false
-    if ($LogLevel -eq 'info') { $shouldLog = $true }
-    elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
-
-    if ($shouldLog) {
-        $logDir = Join-Path $PSScriptRoot 'logs'
-        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
-        $logPath = Join-Path $logDir "ReactiveBackup.log"
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -Path $logPath -Value "[$timestamp] [$Level] $Message"
-    }
+    Write-ReactiveBackupLog -Message $Message -Level $Level -LogLevel $LogLevel
 }
 
 try {
@@ -124,7 +125,7 @@ try {
     $config = Get-JsonConfig -Path $defaultConfigPath
 
     # Initialize LogLevel from default config if not provided (for potential error logging)
-    if (-not $LogLevel) { $LogLevel = $config.logLevel }
+    if (-not $LogLevel) { $LogLevel = Get-ReactiveBackupLogLevel -Config $config }
 
     if (Test-Path $actualConfigPath) {
         try {
@@ -134,7 +135,7 @@ try {
             }
             $config = $actualConfig
             # Update LogLevel from actual config if not provided as param
-            if (-not $PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel = $config.logLevel }
+            if (-not $PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel = Get-ReactiveBackupLogLevel -Config $config }
         }
         catch {
             Write-SolutionLog "Failed to load ReactiveBackup.actual.config: $($_.Exception.Message). Using default config." -Level Error
@@ -157,10 +158,11 @@ try {
     # -------------------------------
     if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
         Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
+        Write-Host ""
         $isBatchMode = $true
         
-        $rootSrc = $config.rootCodeDirectory
-        $rootDest = $config.rootBackupDirectory
+        $rootSrc = Resolve-ReactiveBackupPath -Path $config.rootCodeDirectory -BasePath $PSScriptRoot
+        $rootDest = Resolve-ReactiveBackupPath -Path $config.rootBackupDirectory -BasePath $PSScriptRoot
         $inclFolders = $config.includedRepoFolders
         $exclFolders = $config.excludedRepoFolders
         $inclSub = $config.includedRepoSubfolders
@@ -190,6 +192,7 @@ try {
                     Write-Host "Warning: Repository '$name' not found in $rootSrc" -ForegroundColor Yellow
                 }
             }
+            Write-Host ""
         } elseif ($inclFolders -and @($inclFolders).Count -gt 0) {
             # Include list specified: only backup those repos
             $reposToProcess = $allRepos | Where-Object { $inclFolders -contains $_.Name }
@@ -205,17 +208,22 @@ try {
             $normBackup = $rootDest.TrimEnd('\', '/')
             
             if ($normRepo -eq $normBackup -or $repo.Name -eq $backupDirName) {
-                Write-Host "Skipping backup directory: $($repo.Name)"
+                Write-Host "Skipping backup directory: $($repo.Name)" -ForegroundColor Gray
+                Write-Host ""
                 continue
             }
 
+            Write-Host "Backing up: " -NoNewline
+            Write-Host $repo.Name -ForegroundColor Cyan
             $repoDest = Join-Path $rootDest $repo.Name
             & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
+            Write-Host ""
         }
 
         $backupSucceeded = (-not $anyFailure)
-        if ($backupSucceeded) { exit 0 } else { exit 1 }
+        Complete-ReactiveBackupScript -Code $(if ($backupSucceeded) { 0 } else { 1 }) -Nested:$script:IsNestedInvocation
+        return
     }
 
     # Use params if provided, otherwise fall back to config
@@ -233,19 +241,29 @@ try {
     if (-not $SourceDirectory) { throw "Source directory is not defined." }
     if (-not $DestinationDirectory) { throw "Destination directory is not defined." }
 
-    # Normalize paths to support forward slashes (JSON friendly) and network paths
-    $SourceDirectory = [System.IO.Path]::GetFullPath($SourceDirectory)
-    $DestinationDirectory = [System.IO.Path]::GetFullPath($DestinationDirectory)
+    # Resolve paths against the original working directory for user params,
+    # and against the solution directory for config values. Expand ~ on Unix.
+    $sourceBase = if ($PSBoundParameters.ContainsKey('SourceDirectory')) { $script:OriginalLocation } else { $PSScriptRoot }
+    $destBase = if ($PSBoundParameters.ContainsKey('DestinationDirectory')) { $script:OriginalLocation } else { $PSScriptRoot }
+    $SourceDirectory = Resolve-ReactiveBackupPath -Path $SourceDirectory -BasePath $sourceBase
+    $DestinationDirectory = Resolve-ReactiveBackupPath -Path $DestinationDirectory -BasePath $destBase
 
     if (-not (Test-Path $SourceDirectory)) {
         throw "Source directory not found: $SourceDirectory"
     }
+
+    Assert-ReactiveBackupWritable -Path $DestinationDirectory -Purpose 'backup destination'
 
     if (-not (Test-Path $DestinationDirectory)) {
         New-Item -ItemType Directory -Path $DestinationDirectory | Out-Null
     }
 
     $repoName = Split-Path $SourceDirectory.TrimEnd('\', '/') -Leaf
+
+    if (-not $script:IsNestedInvocation) {
+        Write-Host "Backing up: " -NoNewline
+        Write-Host $repoName -ForegroundColor Cyan
+    }
 
     # -------------------------------
     # Generate Windows-safe timestamp
@@ -287,7 +305,14 @@ try {
         if ($LogLevel -eq 'info') { $shouldLog = $true }
         elseif ($LogLevel -eq 'error' -and $Level -eq 'Error') { $shouldLog = $true }
 
-        if ($shouldLog) { Add-Content $backupLogPath $Message }
+        if ($shouldLog) {
+            try {
+                Write-ReactiveBackupFileLog -Path $backupLogPath -Message $Message
+            }
+            catch {
+                Write-Host "WARNING: Failed to write backup log: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
     }
 
     Write-BackupLog "Backup started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
@@ -334,9 +359,10 @@ try {
     catch {
         Write-Host "`r$prepareMsg - Failed" -ForegroundColor Red
         Write-SolutionLog "Error preparing backup for $SourceDirectory : $($_.Exception.Message)" -Level Error
-        exit 1
+        Complete-ReactiveBackupScript -Code 1 -Nested:$script:IsNestedInvocation
+        return
     }
-    Write-Host "`r$prepareMsg Found $($allFiles.Count) files."
+    Write-Host "`r$prepareMsg Found $($allFiles.Count) files." -ForegroundColor Gray
     $anyFileError = $false
     
     # Progress spinner setup
@@ -414,7 +440,7 @@ try {
     }
 
     # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
-    Write-Host "`r$progressMsg Done.  "
+    Write-Host "`r$progressMsg Done.  " -ForegroundColor Gray
 
     if (-not $anyFileError) {
         Write-BackupLog "$repoName Backup completed successfully."
@@ -436,10 +462,10 @@ catch {
     }
 }
 finally {
+    Write-Host ""
     if ($backupSucceeded) {
         if ($isBatchMode) {
-            Write-Host ""
-            Write-Host "Repository backups completed"
+            Write-Host "Repository backups completed" -ForegroundColor Green
         }
         else {
             Write-Host "$repoName backup successful" -ForegroundColor Green
@@ -455,8 +481,4 @@ finally {
     }
 }
 
-if ($backupSucceeded) {
-    exit 0
-} else {
-    exit 1
-}
+Complete-ReactiveBackupScript -Code $(if ($backupSucceeded) { 0 } else { 1 }) -Nested:$script:IsNestedInvocation

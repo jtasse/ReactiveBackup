@@ -45,6 +45,7 @@ try {
     New-Item -ItemType Directory -Path $solutionDir -Force | Out-Null
     Copy-Item (Join-Path $root 'ReactiveBackup.ps1') $solutionDir
     Copy-Item (Join-Path $root 'ReactiveBackup.EvaluateAndRun.ps1') $solutionDir
+    Copy-Item (Join-Path $root 'ReactiveBackup.Common.ps1') $solutionDir
     Copy-Item (Join-Path $root 'ReactiveBackup.config') $solutionDir
 
     $repoRoot = Join-Path $tempRoot 'repo'
