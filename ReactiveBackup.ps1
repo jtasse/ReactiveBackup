@@ -222,11 +222,8 @@ try {
         }
 
         $backupSucceeded = (-not $anyFailure)
-        if ($script:IsNestedInvocation) {
-            $global:LASTEXITCODE = $(if ($backupSucceeded) { 0 } else { 1 })
-            return
-        }
-        if ($backupSucceeded) { exit 0 } else { exit 1 }
+        Complete-ReactiveBackupScript -Code $(if ($backupSucceeded) { 0 } else { 1 }) -Nested:$script:IsNestedInvocation
+        return
     }
 
     # Use params if provided, otherwise fall back to config
@@ -362,11 +359,8 @@ try {
     catch {
         Write-Host "`r$prepareMsg - Failed" -ForegroundColor Red
         Write-SolutionLog "Error preparing backup for $SourceDirectory : $($_.Exception.Message)" -Level Error
-        if ($script:IsNestedInvocation) {
-            $global:LASTEXITCODE = 1
-            return
-        }
-        exit 1
+        Complete-ReactiveBackupScript -Code 1 -Nested:$script:IsNestedInvocation
+        return
     }
     Write-Host "`r$prepareMsg Found $($allFiles.Count) files." -ForegroundColor Gray
     $anyFileError = $false
@@ -487,16 +481,4 @@ finally {
     }
 }
 
-if ($backupSucceeded) {
-    if ($script:IsNestedInvocation) {
-        $global:LASTEXITCODE = 0
-    } else {
-        exit 0
-    }
-} else {
-    if ($script:IsNestedInvocation) {
-        $global:LASTEXITCODE = 1
-    } else {
-        exit 1
-    }
-}
+Complete-ReactiveBackupScript -Code $(if ($backupSucceeded) { 0 } else { 1 }) -Nested:$script:IsNestedInvocation

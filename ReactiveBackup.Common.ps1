@@ -188,6 +188,25 @@ function Test-ReactiveBackupInteractive {
     }
 }
 
+function Complete-ReactiveBackupScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Code,
+        [switch]$Nested
+    )
+
+    $global:LASTEXITCODE = $Code
+
+    # `exit` ends the whole pwsh process, which closes .desktop/.lnk windows
+    # even when the shortcut uses -NoExit. Nested callers and interactive
+    # terminals should just return so the host session can stay open.
+    if ($Nested -or (Test-ReactiveBackupInteractive)) {
+        return
+    }
+
+    exit $Code
+}
+
 function Get-PwshExecutablePath {
     $command = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($command -and $command.Source) {
