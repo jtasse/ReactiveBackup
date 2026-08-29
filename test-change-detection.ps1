@@ -70,7 +70,7 @@ try {
             includedRepoFolders = @()
             excludedRepoFolders = @()
             includedRepoSubfolders = @()
-            excludedRepoSubfolders = @('.git', 'node_modules', 'dist')
+            excludedRepoSubfolders = @('.git', 'node_modules', 'dist', 'logs')
             checkForCodeChangesIntervalMinutes = 15
             timestampFormat = $TimestampFormat
         }
@@ -181,6 +181,14 @@ try {
     Invoke-RepoEvaluation
     $after = Get-BackupCount
     Assert-Equal $after $before 'changes under node_modules should not trigger backup'
+
+    # logs (EvaluateAndRun output) should not trigger backup
+    New-Item -ItemType Directory -Path (Join-Path $repoRoot 'logs') -Force | Out-Null
+    'log line' | Set-Content -Path (Join-Path $repoRoot 'logs\ReactiveBackup.log') -Encoding UTF8
+    $before = Get-BackupCount
+    Invoke-RepoEvaluation
+    $after = Get-BackupCount
+    Assert-Equal $after $before 'changes under logs should not trigger backup'
 
     # .git and node_modules are not copied into backups
     $latestBackup = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1

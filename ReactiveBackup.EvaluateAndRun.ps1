@@ -382,6 +382,15 @@ function Invoke-BackupCycle {
             New-Item -ItemType Directory -Path $repoBackupPath -Force | Out-Null
         }
 
+        # This tool writes ReactiveBackup.log and threshold-alerts.json under logs/
+        # during a cycle. If that folder is tracked, every run looks like a source change.
+        $repoExclusions = @($excludedRepoSubfolders)
+        $solutionFull = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\', '/')
+        $repoFull = [System.IO.Path]::GetFullPath($repoPath).TrimEnd('\', '/')
+        if ($repoFull -eq $solutionFull -and $repoExclusions -notcontains 'logs') {
+            $repoExclusions += 'logs'
+        }
+
         Write-Log "Checking repo: $repoName"
         Write-Host "Checking repo: " -NoNewline
         Write-Host $repoName -ForegroundColor Cyan -NoNewline
@@ -391,7 +400,7 @@ function Invoke-BackupCycle {
         $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.CreationTimeUtc } else { $null }
         
         try {
-            $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles
             Write-Host "" 
         } catch {
             Write-Host ""
@@ -425,7 +434,7 @@ function Invoke-BackupCycle {
 
         if (-not $shouldBackup -and $lastBackupDirectory) {
             $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
-            $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles
             if ($inventoryChanged) {
                 Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
                 Write-Host "Inventory changed (created or deleted file). Backup required." -ForegroundColor Yellow
@@ -440,7 +449,7 @@ function Invoke-BackupCycle {
 
         if ($shouldBackup) {
             Write-Host "Running backup for $repoName..." -ForegroundColor Cyan
-            & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
+            & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
             $backupExitCode = $LASTEXITCODE
             if ($null -eq $backupExitCode) {
                 $backupExitCode = if ($?) { 0 } else { 1 }
@@ -455,6 +464,13 @@ function Invoke-BackupCycle {
         finally {
             Write-Host ""
         }
+    }
+
+    try {
+        Invoke-ReactiveBackupThresholdAlerts -Config $config -BackupRoot $rootBackupDirectory -SolutionRoot $PSScriptRoot
+    }
+    catch {
+        Write-Log "Threshold alert check failed: $($_.Exception.Message)" -Level Error
     }
 
     return $config.checkForCodeChangesIntervalMinutes
