@@ -130,6 +130,11 @@ try {
     if (Test-Path $actualConfigPath) {
         try {
             $actualConfig = Get-JsonConfig -Path $actualConfigPath
+        }
+        catch {
+            throw "ReactiveBackup.actual.config is not valid JSON. Quote every name in arrays (for example [""jtt"", ""repo""]). $($_.Exception.Message)"
+        }
+        try {
             if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }
@@ -371,6 +376,7 @@ try {
     
     $progressMsg = "Backing up files in $SourceDirectory..."
     Write-Host -NoNewline "$($spinner[0]) $progressMsg"
+    $inventoryPaths = New-Object System.Collections.Generic.List[string]
 
     foreach ($file in $allFiles) {
         # Update spinner every 10 files
@@ -410,15 +416,11 @@ try {
                 }
             }
 
-            # Construct destination path
+            $inventoryPaths.Add($normalizedRelPath)
+
+            # Construct destination path. Use System.IO so names with [brackets] are not treated as wildcards.
             $targetFile = Join-Path $codeBackupPath $relPath
-            $targetDir = Split-Path $targetFile -Parent
-
-            if (-not (Test-Path $targetDir)) {
-                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-            }
-
-            Copy-Item -Path $file.FullName -Destination $targetFile -Force
+            Copy-ReactiveBackupFile -Source $file.FullName -Destination $targetFile
         }
         catch {
             $anyFileError = $true
@@ -441,6 +443,8 @@ try {
 
     # Overwrite the spinner line with the clean message (padded to ensure spinner chars are erased)
     Write-Host "`r$progressMsg Done.  " -ForegroundColor Gray
+
+    Write-ReactiveBackupInventory -BackupDirectory $backupRoot -RelativePaths @($inventoryPaths)
 
     if (-not $anyFileError) {
         Write-BackupLog "$repoName Backup completed successfully."

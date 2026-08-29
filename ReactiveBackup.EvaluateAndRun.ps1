@@ -129,7 +129,7 @@ function Get-LastBackupDirectory {
         return $null
     }
 
-    return ($dirs | Sort-Object { $_.LastWriteTimeUtc } -Descending | Select-Object -First 1)
+    return ($dirs | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1)
 }
 
 function Get-LastBackupTime {
@@ -161,7 +161,12 @@ function Get-InventoryChange {
     $currentSet = @(Get-RelativePathSet -Root $RepoPath -IncludedRepoSubfolders $IncludedRepoSubfolders -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $IncludeRootFiles)
     $backupSet = @()
 
-    if (Test-Path $BackupRoot) {
+    $backupDirectory = Split-Path -Parent $BackupRoot
+    $manifestSet = Read-ReactiveBackupInventory -BackupDirectory $backupDirectory
+    if ($null -ne $manifestSet) {
+        $backupSet = @($manifestSet)
+    }
+    elseif (Test-Path -LiteralPath $BackupRoot) {
         $backupSet = @(Get-RelativePathSet -Root $BackupRoot -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $true)
     }
 
@@ -260,15 +265,22 @@ function Invoke-BackupCycle {
     # Load default config first
     $config = Get-JsonConfig -Path $defaultConfigPath
     $defaultInterval = $config.checkForCodeChangesIntervalMinutes
+    $configSource = 'ReactiveBackup.config'
 
     $actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
     if (Test-Path $actualConfigPath) {
         try {
             $actualConfig = Get-JsonConfig -Path $actualConfigPath
+        }
+        catch {
+            throw "ReactiveBackup.actual.config is not valid JSON. Quote every name in arrays (for example [""jtt"", ""repo""]). $($_.Exception.Message)"
+        }
+        try {
             if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }
             $config = $actualConfig
+            $configSource = 'ReactiveBackup.actual.config'
 
             if (-not $config.PSObject.Properties.Name -contains 'checkForCodeChangesIntervalMinutes') {
                 $config | Add-Member -MemberType NoteProperty -Name 'checkForCodeChangesIntervalMinutes' -Value $defaultInterval
@@ -340,6 +352,12 @@ function Invoke-BackupCycle {
         Write-Host "No repositories found to check under $rootCodeDirectory" -ForegroundColor Yellow
         Write-Host ""
     }
+    else {
+        $repoNames = @($reposToCheck | ForEach-Object { $_.Name })
+        Write-Log "Using $configSource (backupLevel=$backupLevel). Repositories: $($repoNames -join ', ')"
+        Write-Host "Using $configSource. Repositories: $($repoNames -join ', ')" -ForegroundColor Gray
+        Write-Host ""
+    }
 
     foreach ($repo in $reposToCheck) {
         try {
@@ -364,16 +382,25 @@ function Invoke-BackupCycle {
             New-Item -ItemType Directory -Path $repoBackupPath -Force | Out-Null
         }
 
+        # This tool writes ReactiveBackup.log and threshold-alerts.json under logs/
+        # during a cycle. If that folder is tracked, every run looks like a source change.
+        $repoExclusions = @($excludedRepoSubfolders)
+        $solutionFull = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\', '/')
+        $repoFull = [System.IO.Path]::GetFullPath($repoPath).TrimEnd('\', '/')
+        if ($repoFull -eq $solutionFull -and $repoExclusions -notcontains 'logs') {
+            $repoExclusions += 'logs'
+        }
+
         Write-Log "Checking repo: $repoName"
         Write-Host "Checking repo: " -NoNewline
         Write-Host $repoName -ForegroundColor Cyan -NoNewline
         Write-Host "... " -NoNewline
 
         $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $repoBackupPath
-        $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.LastWriteTimeUtc } else { $null }
+        $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.CreationTimeUtc } else { $null }
         
         try {
-            $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles
             Write-Host "" 
         } catch {
             Write-Host ""
@@ -407,9 +434,10 @@ function Invoke-BackupCycle {
 
         if (-not $shouldBackup -and $lastBackupDirectory) {
             $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
-            $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
+            $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles
             if ($inventoryChanged) {
                 Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
+                Write-Host "Inventory changed (created or deleted file). Backup required." -ForegroundColor Yellow
                 $shouldBackup = $true
             }
         }
@@ -421,7 +449,7 @@ function Invoke-BackupCycle {
 
         if ($shouldBackup) {
             Write-Host "Running backup for $repoName..." -ForegroundColor Cyan
-            & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
+            & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $repoPath -DestinationDirectory $repoBackupPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
             $backupExitCode = $LASTEXITCODE
             if ($null -eq $backupExitCode) {
                 $backupExitCode = if ($?) { 0 } else { 1 }
@@ -436,6 +464,13 @@ function Invoke-BackupCycle {
         finally {
             Write-Host ""
         }
+    }
+
+    try {
+        Invoke-ReactiveBackupThresholdAlerts -Config $config -BackupRoot $rootBackupDirectory -SolutionRoot $PSScriptRoot
+    }
+    catch {
+        Write-Log "Threshold alert check failed: $($_.Exception.Message)" -Level Error
     }
 
     return $config.checkForCodeChangesIntervalMinutes

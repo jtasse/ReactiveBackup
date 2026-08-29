@@ -20,7 +20,9 @@
   - [Running Backups Conditionally](#running-backups-conditionally)
     - [Run Once](#run-once)
     - [Run Continuously](#run-continuously)
-    - [Desktop shortcuts and scheduled backups](#desktop-shortcuts-and-scheduled-backups)
+    - [Desktop shortcuts](#desktop-shortcuts)
+    - [Scheduled backups](#scheduled-backups)
+    - [Backup folder size alerts](#backup-folder-size-alerts)
 - [Reporting Issues](#reporting-issues)
 
 # What Is It?
@@ -41,7 +43,7 @@ However, if you're like me and you still get into some gnarly situations despite
 
 All solution functionality is fully supported in Windows.
 
-For MacOs and Linux you can use everything except Windows Scheduled Tasks. For these users, if you want to automate backups, you can either use the [Run Continuously](#run-continuously) functionality in the `ReactiveBackup.EvaluateAndRun.ps1` script; or follow the instructions in the [MacOS](#macos) and [Linux](#linux) sections below.
+On MacOS and Linux, backups, desktop shortcuts, and scheduled checks are supported. Scheduled checks use a user crontab entry instead of Windows Task Scheduler. You can also watch backups in a visible window with the [Run Once](#run-once) and [Run Continuously](#run-continuously) modes in `ReactiveBackup.EvaluateAndRun.ps1`.
 
 ## Windows
 
@@ -69,10 +71,12 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
    pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
    ```
 
-4. **Scheduling**: The same script writes a user crontab entry:
+4. **Scheduling**: Create or edit a user crontab entry that runs `EvaluateAndRun`:
    ```bash
-   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
+   pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
    ```
+
+   If `cron` is not installed, the script warns you and waits for a keypress. You can still run `ReactiveBackup.EvaluateAndRun.ps1` for a one-off or continuous backup in the current window.
 
 ## Linux
 
@@ -100,10 +104,12 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
    > ```
    > Then recreate the shortcuts with `pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts` so `Exec` does not use sudo.
 
-4. **Scheduling**: The same launcher script writes a user crontab entry from `checkForCodeChangesIntervalMinutes`:
+4. **Scheduling**: Create or edit a user crontab entry that runs `EvaluateAndRun` at the interval in `checkForCodeChangesIntervalMinutes`:
    ```bash
-   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
+   pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
    ```
+
+   If `cron` is not installed, the script warns you and waits for a keypress. You can still run `ReactiveBackup.EvaluateAndRun.ps1` for a one-off or continuous backup in the current window.
 
 # Configuration
 
@@ -134,12 +140,22 @@ For settings involving drive letter paths, you may use any of the following synt
 | `backupLevel`                        | Determines the scope of the backup.<br>• "repo" (default): Treats `rootCodeDirectory` as a single repository.<br>• "repo-parent": Treats `rootCodeDirectory` as a parent folder containing multiple repositories.                                                                                            |
 | `includeRootFiles`                   | Indicates whether files directly in the root of your target folder will be backed up. Defaults to true.                                                                                                                                                                                                      |
 | `includedRepoSubfolders`             | This takes an array of 0 to n subfolders (of your rootCodeDirectory) that you would like to back up. Any subfolders not in this list will be ignored.<br>> **NOTE**: specify only the folder names here (e.g. - ["src", "test"] and NOT ["C:\\dev\\github\\my-repo\\src", "C:\\dev\\github\\my-repo\\test"]) |
-| `excludedRepoSubfolders`             | Array of subfolders to exclude from the backup. (Ignored if `includedRepoSubfolders` is populated).                                                                                                                                                                                                          |
+| `excludedRepoSubfolders`             | Array of subfolders to exclude from the backup. (Ignored if `includedRepoSubfolders` is populated). Defaults include `.git`, `node_modules`, `dist`, `.next`, `.venv`, `__pycache__`, `.pytest_cache`, `.aws-sam`, and `logs`. `logs` is included so writing `ReactiveBackup.log` during a check does not look like a source change in this repo. EvaluateAndRun also always skips its own `logs` folder when the ReactiveBackup solution itself is one of the repos being checked. |
 | `includedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to include.                                                                                                                                                                                                                        |
 | `excludedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to exclude.                                                                                                                                                                                                                        |
-| `checkForCodeChangesIntervalMinutes` | The time interval (in minutes) at which the solution will check whether it is time to make a backup.<br>> **NOTE**: use the JSON number syntax of `15` and NOT "15"                                                                                                                                          |
+| `checkForCodeChangesIntervalMinutes` | The time interval (in minutes) at which the solution will check whether it is time to make a backup.<br>> **NOTE**: use the JSON number syntax of `15` and NOT "15". Changing this does **not** change an existing Windows scheduled task or crontab until you run `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` again. |
 | `timestampFormat`                    | Determines the timestamp format of how backup folders will be named. For example, `yyyyMMdd - hh:mm tt` would yield a backup folder named `20251223 03.14 PM`                                                                                                                                                |
 | `logLevel`                           | Controls logging verbosity. Options are "info" or "error".                                                                                                                                                                                                                                                   |
+| `sendBackupFolderThresholdExceededAlerts` | When true, EvaluateAndRun may email you if a **configured** repo backup folder is at or above `backupSizeThresholdMb`, or if the entire `rootBackupDirectory` is at or above `totalBackupSizeThresholdMb`. Requires complete SMTP settings. |
+| `backupSizeThresholdMb`              | Size limit in MB for each **configured** repo backup folder (the same repos EvaluateAndRun would back up). `0` disables this check. |
+| `totalBackupSizeThresholdMb`         | Size limit in MB for the entire `rootBackupDirectory`. Only used when `includeUnconfiguredBackupFoldersInSizeAlerts` is true. |
+| `includeUnconfiguredBackupFoldersInSizeAlerts` | When false (recommended while testing), size alerts only measure **configured** backup folders. When true, leftover folders such as `_BACKUPS\meowlin` are scanned for the total. |
+| `alertEmail`                         | Recipient address for threshold alerts.                                                                                                                                                                                                                                                                      |
+| `smtpHost`                           | SMTP server hostname (for example `smtp.gmail.com`). Leave SMTP fields empty to disable sending. Incomplete SMTP settings log a warning and do not fail the backup.                                                                         |
+| `smtpPort`                           | SMTP port. Defaults to 587.                                                                                                                                                                                                                                                                                  |
+| `smtpUsername`                       | SMTP login. For Gmail, use the full Gmail address.                                                                                                                                                                                                                                                           |
+| `smtpPassword`                       | SMTP password. For Gmail, use an [app password](https://support.google.com/accounts/answer/185833), not your normal account password. Google may display it in groups of four with spaces; those spaces are for readability only. The script strips whitespace, so either paste works. Store this only in `ReactiveBackup.actual.config` (gitignored). |
+| `smtpFrom`                           | From address. Defaults to `smtpUsername` if empty. Must be allowed by your SMTP provider.                                                                                                                                                                                                                    |
 
 # Backup Output Structure
 
@@ -269,9 +285,11 @@ This mode is useful for cron jobs and CI/test automation.
 
 Enter `2` at the prompt to put the script in a mode that will run scheduled backups continuously based on the configuration (including `checkForCodeChangesIntervalMinutes`).
 
-To stop this process, press enter `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
+To stop this process, press `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
 
-### Desktop shortcuts and scheduled backups
+This is the visible way to watch backups run. For a hidden background schedule, use [Scheduled backups](#scheduled-backups) instead.
+
+### Desktop shortcuts
 
 Use `ReactiveBackup.Create-Launchers.ps1` on Windows, Linux, and macOS:
 
@@ -279,20 +297,109 @@ Use `ReactiveBackup.Create-Launchers.ps1` on Windows, Linux, and macOS:
 pwsh ./ReactiveBackup.Create-Launchers.ps1
 ```
 
-The script prompts for:
+That creates shortcuts for:
 
-1. **Desktop / start-menu shortcuts** — Windows `.lnk` files, Linux `.desktop` files, or macOS `.command` files
-2. **Scheduled backups** — Windows Task Scheduler, or a user crontab on Linux/macOS
-3. **Both**
+- **ReactiveBackup** — ad-hoc backup
+- **ReactiveBackup EvaluateAndRun** — visible one-off or continuous backup
+- **ReactiveBackup Scheduled Task** — create or edit the background schedule
 
-You can skip the menu:
+Windows gets `.lnk` files on the Desktop and Start Menu. Linux gets `.desktop` files. macOS gets `.command` files on the Desktop.
 
 ```powershell
 pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
-pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
 ```
 
-On Windows, creating the scheduled task may require an elevated PowerShell session. The task (or cron entry) runs `ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask` in the background at the interval in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
+### Scheduled backups
+
+Use `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` to schedule a hidden background check that runs `ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask`.
+
+```powershell
+pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
+```
+
+| Platform | Mechanism |
+| -------- | --------- |
+| Windows | Task Scheduler task named `Reactive Backup` |
+| Linux / macOS | user crontab entry |
+
+Follow the prompts:
+
+- If no schedule exists, you will be asked whether to create it.
+- If a Windows task already exists, you can **start**, **stop**, or **delete** it.
+- If a cron entry already exists, you can **update** or **delete** it.
+
+On Windows, creating the scheduled task may require an elevated PowerShell session. On Linux/macOS, if `cron` is not installed, the script warns you and waits for a keypress instead of creating a schedule.
+
+The scheduled job runs at the interval in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
+
+`EvaluateAndRun.ps1` re-reads `ReactiveBackup.config` and `ReactiveBackup.actual.config` on **every** run. Changing repo lists, threshold, SMTP, or the alert toggle takes effect the next time the task fires. Recreate or update the scheduled task only if you change `checkForCodeChangesIntervalMinutes`.
+
+To watch a one-off or continuous backup in a visible window, run `ReactiveBackup.EvaluateAndRun.ps1` instead.
+
+### Backup folder size alerts
+
+After each EvaluateAndRun cycle (including the scheduled task), the script can email you about backup size. There are two limits:
+
+- `backupSizeThresholdMb` applies only to **configured** repo folders (your include list, or every source repo minus excludes when the include list is empty). For example `_BACKUPS\jtt`, not leftover folders you are no longer backing up.
+- `totalBackupSizeThresholdMb` applies to the whole `rootBackupDirectory`. Set this to catch leftovers such as a huge `_BACKUPS\meowlin` after you removed that repo from the include list.
+- `includeUnconfiguredBackupFoldersInSizeAlerts` is the on/off switch for that leftover scan. Keep it `false` while testing alerts on configured repos. Set it `true` when you are ready for the full `_BACKUPS` walk (this can take a long time; the console shows configured vs leftover and a spinner with elapsed time).
+
+Configured folders are always measured first. Leftovers are measured only when the total limit is greater than 0 **and** `includeUnconfiguredBackupFoldersInSizeAlerts` is true. One email covers both. Sizes are cached until a new timestamp folder appears under that repo.
+
+Sequence:
+
+1. First alert
+2. Reminder 3 days later
+3. Final reminder 4 days after that (7 days from the first)
+
+Then that set of problems stops generating mail until sizes drop below the limit, you change either threshold, or a **new** configured folder (or the total) goes over the limit.
+
+#### Turning the feature on
+
+Put mail settings in `ReactiveBackup.actual.config` (gitignored). Do not put passwords in `ReactiveBackup.config`.
+
+| Setting | Role |
+| ------- | ---- |
+| `sendBackupFolderThresholdExceededAlerts` | `true` to enable, `false` to disable even if SMTP is filled in |
+| `backupSizeThresholdMb` | Limit per **configured** repo backup folder (JSON number, for example `10240` for 10 GB). `0` disables this check. |
+| `totalBackupSizeThresholdMb` | Limit for the entire `rootBackupDirectory`. |
+| `includeUnconfiguredBackupFoldersInSizeAlerts` | `false` = configured folders only. `true` = also scan leftover folders for the total. |
+| `alertEmail` | To: address |
+| `smtpHost` / `smtpPort` / `smtpUsername` / `smtpPassword` | SMTP login. Port defaults to `587` |
+| `smtpFrom` | From: address. If empty, `smtpUsername` is used |
+
+SMTP behavior:
+
+- **All SMTP fields empty:** no mail is sent, and no SMTP warning is logged (unless the feature is on; then you get a warning that alerts are enabled but SMTP is empty).
+- **Partially filled in** (for example host and username but no password): a warning is written to the log. The backup still runs.
+- **Send fails** (wrong password, blocked port): a warning is written to the log. The backup still runs.
+
+Edits to these settings are read on the **next** EvaluateAndRun run. You do not need to recreate the scheduled task unless you change `checkForCodeChangesIntervalMinutes`.
+
+#### Gmail app password
+
+Gmail will not accept your normal account password over SMTP.
+
+1. Turn on [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification) for the Gmail account.
+2. Create an [app password](https://myaccount.google.com/apppasswords).
+3. Google shows a 16-character password, often grouped like `xxxx xxxx xxxx xxxx`. The spaces are only so you can read it. Paste it into `smtpPassword` with or without spaces; the script removes whitespace before connecting.
+
+Example `ReactiveBackup.actual.config` fragment:
+
+```json
+"sendBackupFolderThresholdExceededAlerts": true,
+"backupSizeThresholdMb": 10240,
+"totalBackupSizeThresholdMb": 10240,
+"includeUnconfiguredBackupFoldersInSizeAlerts": false,
+"alertEmail": "you@gmail.com",
+"smtpHost": "smtp.gmail.com",
+"smtpPort": 587,
+"smtpUsername": "you@gmail.com",
+"smtpPassword": "xxxx xxxx xxxx xxxx",
+"smtpFrom": "you@gmail.com"
+```
+
+Sending as a custom domain (for example `noreply@yourdomain.com`) requires an SMTP host that is allowed to use that From address. That is not included by default.
 
 # Reporting Issues
 

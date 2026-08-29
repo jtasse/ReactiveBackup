@@ -70,7 +70,7 @@ try {
             includedRepoFolders = @()
             excludedRepoFolders = @()
             includedRepoSubfolders = @()
-            excludedRepoSubfolders = @('.git', 'node_modules', 'dist')
+            excludedRepoSubfolders = @('.git', 'node_modules', 'dist', 'logs')
             checkForCodeChangesIntervalMinutes = 15
             timestampFormat = $TimestampFormat
         }
@@ -143,6 +143,23 @@ try {
     $after = Get-BackupCount
     Assert-True ($after -gt $before) 'deleting a file should trigger backup'
 
+    # creating a Next.js-style file with [brackets] should copy and not retrigger
+    $bracketDir = Join-Path $repoRoot 'src\[id]'
+    [void][System.IO.Directory]::CreateDirectory($bracketDir)
+    $bracketFile = Join-Path $bracketDir 'page.tsx'
+    [System.IO.File]::WriteAllText($bracketFile, 'dynamic route')
+    $before = Get-BackupCount
+    Invoke-RepoEvaluation
+    $after = Get-BackupCount
+    Assert-True ($after -gt $before) 'creating a file whose path contains [brackets] should trigger backup'
+    $latestWithBrackets = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1
+    $copiedBracket = Join-Path $latestWithBrackets.FullName 'code\src\[id]\page.tsx'
+    Assert-True ([System.IO.File]::Exists($copiedBracket)) 'backup should contain the file with [brackets] in its path'
+    $before = Get-BackupCount
+    Invoke-RepoEvaluation
+    $after = Get-BackupCount
+    Assert-Equal $after $before 'unchanged repo with [bracket] files should not create another backup'
+
     # modifying a file still triggers backup
     'updated content' | Set-Content -Path (Join-Path $repoRoot 'tracked.txt') -Encoding UTF8
     $before = Get-BackupCount
@@ -165,8 +182,16 @@ try {
     $after = Get-BackupCount
     Assert-Equal $after $before 'changes under node_modules should not trigger backup'
 
+    # logs (EvaluateAndRun output) should not trigger backup
+    New-Item -ItemType Directory -Path (Join-Path $repoRoot 'logs') -Force | Out-Null
+    'log line' | Set-Content -Path (Join-Path $repoRoot 'logs\ReactiveBackup.log') -Encoding UTF8
+    $before = Get-BackupCount
+    Invoke-RepoEvaluation
+    $after = Get-BackupCount
+    Assert-Equal $after $before 'changes under logs should not trigger backup'
+
     # .git and node_modules are not copied into backups
-    $latestBackup = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    $latestBackup = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1
     $copiedCodePath = Join-Path $latestBackup.FullName 'code'
     Assert-True (-not (Test-Path (Join-Path $copiedCodePath '.git'))) 'backup should omit .git'
     Assert-True (-not (Test-Path (Join-Path $copiedCodePath 'node_modules'))) 'backup should omit node_modules'
