@@ -75,6 +75,11 @@ function Get-ScheduleConfig {
     if (Test-Path $actualConfigPath) {
         try {
             $actualConfig = Get-JsonConfig -Path $actualConfigPath
+        }
+        catch {
+            throw "ReactiveBackup.actual.config is not valid JSON. Quote every name in arrays (for example [""jtt"", ""repo""]). $($_.Exception.Message)"
+        }
+        try {
             $config = $actualConfig
             if ($defaultInterval -and -not ($config.PSObject.Properties.Name -contains 'checkForCodeChangesIntervalMinutes')) {
                 $config | Add-Member -MemberType NoteProperty -Name 'checkForCodeChangesIntervalMinutes' -Value $defaultInterval

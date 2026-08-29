@@ -463,3 +463,54 @@ function Invoke-ReactiveBackupRelaunchAsSessionUser {
     & sudo -u $sudoUser --preserve-env=DOTNET_SYSTEM_IO_DISABLEFILELOCKING -- $pwsh @argList
     return $LASTEXITCODE
 }
+
+function Copy-ReactiveBackupFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $destDir = [System.IO.Path]::GetDirectoryName($Destination)
+    if ($destDir -and -not [System.IO.Directory]::Exists($destDir)) {
+        [void][System.IO.Directory]::CreateDirectory($destDir)
+    }
+
+    [System.IO.File]::Copy($Source, $Destination, $true)
+}
+
+function Get-ReactiveBackupInventoryPath {
+    param([string]$BackupDirectory)
+
+    return (Join-Path (Join-Path $BackupDirectory 'backup data') 'source-inventory.txt')
+}
+
+function Write-ReactiveBackupInventory {
+    param(
+        [string]$BackupDirectory,
+        [string[]]$RelativePaths
+    )
+
+    $path = Get-ReactiveBackupInventoryPath -BackupDirectory $BackupDirectory
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not [System.IO.Directory]::Exists($dir)) {
+        [void][System.IO.Directory]::CreateDirectory($dir)
+    }
+
+    $lines = @($RelativePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllLines($path, $lines, $utf8)
+}
+
+function Read-ReactiveBackupInventory {
+    param([string]$BackupDirectory)
+
+    $path = Get-ReactiveBackupInventoryPath -BackupDirectory $BackupDirectory
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $null
+    }
+
+    $lines = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue)
+    return @($lines | ForEach-Object { ($_ -replace '\\', '/').Trim('/') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+}

@@ -129,7 +129,7 @@ function Get-LastBackupDirectory {
         return $null
     }
 
-    return ($dirs | Sort-Object { $_.LastWriteTimeUtc } -Descending | Select-Object -First 1)
+    return ($dirs | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1)
 }
 
 function Get-LastBackupTime {
@@ -161,7 +161,12 @@ function Get-InventoryChange {
     $currentSet = @(Get-RelativePathSet -Root $RepoPath -IncludedRepoSubfolders $IncludedRepoSubfolders -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $IncludeRootFiles)
     $backupSet = @()
 
-    if (Test-Path $BackupRoot) {
+    $backupDirectory = Split-Path -Parent $BackupRoot
+    $manifestSet = Read-ReactiveBackupInventory -BackupDirectory $backupDirectory
+    if ($null -ne $manifestSet) {
+        $backupSet = @($manifestSet)
+    }
+    elseif (Test-Path -LiteralPath $BackupRoot) {
         $backupSet = @(Get-RelativePathSet -Root $BackupRoot -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $ExcludedRepoSubfolders -IncludeRootFiles $true)
     }
 
@@ -265,6 +270,11 @@ function Invoke-BackupCycle {
     if (Test-Path $actualConfigPath) {
         try {
             $actualConfig = Get-JsonConfig -Path $actualConfigPath
+        }
+        catch {
+            throw "ReactiveBackup.actual.config is not valid JSON. Quote every name in arrays (for example [""jtt"", ""repo""]). $($_.Exception.Message)"
+        }
+        try {
             if (-not $actualConfig.rootCodeDirectory -or -not $actualConfig.rootBackupDirectory) {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }
@@ -370,7 +380,7 @@ function Invoke-BackupCycle {
         Write-Host "... " -NoNewline
 
         $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $repoBackupPath
-        $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.LastWriteTimeUtc } else { $null }
+        $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.CreationTimeUtc } else { $null }
         
         try {
             $trackedFiles = Get-TrackedFiles -Root $repoPath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
@@ -410,6 +420,7 @@ function Invoke-BackupCycle {
             $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $excludedRepoSubfolders -IncludeRootFiles $includeRootFiles
             if ($inventoryChanged) {
                 Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
+                Write-Host "Inventory changed (created or deleted file). Backup required." -ForegroundColor Yellow
                 $shouldBackup = $true
             }
         }
