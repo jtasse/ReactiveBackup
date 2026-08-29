@@ -265,6 +265,7 @@ function Invoke-BackupCycle {
     # Load default config first
     $config = Get-JsonConfig -Path $defaultConfigPath
     $defaultInterval = $config.checkForCodeChangesIntervalMinutes
+    $configSource = 'ReactiveBackup.config'
 
     $actualConfigPath = Join-Path $PSScriptRoot 'ReactiveBackup.actual.config'
     if (Test-Path $actualConfigPath) {
@@ -279,6 +280,7 @@ function Invoke-BackupCycle {
                 throw "Missing required keys: rootCodeDirectory or rootBackupDirectory"
             }
             $config = $actualConfig
+            $configSource = 'ReactiveBackup.actual.config'
 
             if (-not $config.PSObject.Properties.Name -contains 'checkForCodeChangesIntervalMinutes') {
                 $config | Add-Member -MemberType NoteProperty -Name 'checkForCodeChangesIntervalMinutes' -Value $defaultInterval
@@ -348,6 +350,12 @@ function Invoke-BackupCycle {
     if (-not $reposToCheck -or @($reposToCheck).Count -eq 0) {
         Write-Log "No repositories found to check under $rootCodeDirectory" -Level Error
         Write-Host "No repositories found to check under $rootCodeDirectory" -ForegroundColor Yellow
+        Write-Host ""
+    }
+    else {
+        $repoNames = @($reposToCheck | ForEach-Object { $_.Name })
+        Write-Log "Using $configSource (backupLevel=$backupLevel). Repositories: $($repoNames -join ', ')"
+        Write-Host "Using $configSource. Repositories: $($repoNames -join ', ')" -ForegroundColor Gray
         Write-Host ""
     }
 
