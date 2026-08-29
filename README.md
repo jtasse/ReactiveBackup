@@ -20,7 +20,8 @@
   - [Running Backups Conditionally](#running-backups-conditionally)
     - [Run Once](#run-once)
     - [Run Continuously](#run-continuously)
-    - [Desktop shortcuts and scheduled backups](#desktop-shortcuts-and-scheduled-backups)
+    - [Desktop shortcuts](#desktop-shortcuts)
+    - [Scheduled backups](#scheduled-backups)
 - [Reporting Issues](#reporting-issues)
 
 # What Is It?
@@ -41,7 +42,7 @@ However, if you're like me and you still get into some gnarly situations despite
 
 All solution functionality is fully supported in Windows.
 
-For MacOs and Linux you can use everything except Windows Scheduled Tasks. For these users, if you want to automate backups, you can either use the [Run Continuously](#run-continuously) functionality in the `ReactiveBackup.EvaluateAndRun.ps1` script; or follow the instructions in the [MacOS](#macos) and [Linux](#linux) sections below.
+On MacOS and Linux, backups, desktop shortcuts, and scheduled checks are supported. Scheduled checks use a user crontab entry instead of Windows Task Scheduler. You can also watch backups in a visible window with the [Run Once](#run-once) and [Run Continuously](#run-continuously) modes in `ReactiveBackup.EvaluateAndRun.ps1`.
 
 ## Windows
 
@@ -69,10 +70,12 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
    pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
    ```
 
-4. **Scheduling**: The same script writes a user crontab entry:
+4. **Scheduling**: Create or edit a user crontab entry that runs `EvaluateAndRun`:
    ```bash
-   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
+   pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
    ```
+
+   If `cron` is not installed, the script warns you and waits for a keypress. You can still run `ReactiveBackup.EvaluateAndRun.ps1` for a one-off or continuous backup in the current window.
 
 ## Linux
 
@@ -100,10 +103,12 @@ For MacOs and Linux you can use everything except Windows Scheduled Tasks. For t
    > ```
    > Then recreate the shortcuts with `pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts` so `Exec` does not use sudo.
 
-4. **Scheduling**: The same launcher script writes a user crontab entry from `checkForCodeChangesIntervalMinutes`:
+4. **Scheduling**: Create or edit a user crontab entry that runs `EvaluateAndRun` at the interval in `checkForCodeChangesIntervalMinutes`:
    ```bash
-   pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
+   pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
    ```
+
+   If `cron` is not installed, the script warns you and waits for a keypress. You can still run `ReactiveBackup.EvaluateAndRun.ps1` for a one-off or continuous backup in the current window.
 
 # Configuration
 
@@ -269,9 +274,11 @@ This mode is useful for cron jobs and CI/test automation.
 
 Enter `2` at the prompt to put the script in a mode that will run scheduled backups continuously based on the configuration (including `checkForCodeChangesIntervalMinutes`).
 
-To stop this process, press enter `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
+To stop this process, press `Ctrl+C` on your keyboard or click the `x` on the PowerShell window.
 
-### Desktop shortcuts and scheduled backups
+This is the visible way to watch backups run. For a hidden background schedule, use [Scheduled backups](#scheduled-backups) instead.
+
+### Desktop shortcuts
 
 Use `ReactiveBackup.Create-Launchers.ps1` on Windows, Linux, and macOS:
 
@@ -279,20 +286,42 @@ Use `ReactiveBackup.Create-Launchers.ps1` on Windows, Linux, and macOS:
 pwsh ./ReactiveBackup.Create-Launchers.ps1
 ```
 
-The script prompts for:
+That creates shortcuts for:
 
-1. **Desktop / start-menu shortcuts** — Windows `.lnk` files, Linux `.desktop` files, or macOS `.command` files
-2. **Scheduled backups** — Windows Task Scheduler, or a user crontab on Linux/macOS
-3. **Both**
+- **ReactiveBackup** — ad-hoc backup
+- **ReactiveBackup EvaluateAndRun** — visible one-off or continuous backup
+- **ReactiveBackup Scheduled Task** — create or edit the background schedule
 
-You can skip the menu:
+Windows gets `.lnk` files on the Desktop and Start Menu. Linux gets `.desktop` files. macOS gets `.command` files on the Desktop.
 
 ```powershell
 pwsh ./ReactiveBackup.Create-Launchers.ps1 -Shortcuts
-pwsh ./ReactiveBackup.Create-Launchers.ps1 -Schedule
 ```
 
-On Windows, creating the scheduled task may require an elevated PowerShell session. The task (or cron entry) runs `ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask` in the background at the interval in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
+### Scheduled backups
+
+Use `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` to schedule a hidden background check that runs `ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask`.
+
+```powershell
+pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
+```
+
+| Platform | Mechanism |
+| -------- | --------- |
+| Windows | Task Scheduler task named `Reactive Backup` |
+| Linux / macOS | user crontab entry |
+
+Follow the prompts:
+
+- If no schedule exists, you will be asked whether to create it.
+- If a Windows task already exists, you can **start**, **stop**, or **delete** it.
+- If a cron entry already exists, you can **update** or **delete** it.
+
+On Windows, creating the scheduled task may require an elevated PowerShell session. On Linux/macOS, if `cron` is not installed, the script warns you and waits for a keypress instead of creating a schedule.
+
+The scheduled job runs at the interval in `checkForCodeChangesIntervalMinutes`. It checks if files have changed since the last backup before creating a new one, including file creates, edits, and deletes. It also ignores `.git`, `node_modules`, and `dist` using OS-agnostic matching while still backing up `.github`.
+
+To watch a one-off or continuous backup in a visible window, run `ReactiveBackup.EvaluateAndRun.ps1` instead.
 
 # Reporting Issues
 
