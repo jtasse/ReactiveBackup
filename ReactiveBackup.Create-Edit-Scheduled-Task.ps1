@@ -1,5 +1,5 @@
 # ReactiveBackup.Create-Edit-Scheduled-Task.ps1
-# Windows: Task Scheduler
+# Windows: Task Scheduler -> powershell.exe -> ReactiveBackup.Run-Scheduled.ps1 -> pwsh
 # Linux/macOS: user crontab
 # The scheduled job runs EvaluateAndRun.ps1 -ScheduledTask in the background.
 # For a visible one-off or continuous backup, run ReactiveBackup.EvaluateAndRun.ps1 instead.
@@ -123,9 +123,58 @@ function Get-CronExpression {
 }
 
 function Write-EvaluateAndRunReminder {
-    Write-Host 'This script schedules a hidden background check that runs ReactiveBackup.EvaluateAndRun.ps1 -ScheduledTask.' -ForegroundColor Cyan
+    Write-Host 'This script schedules a hidden background check.' -ForegroundColor Cyan
+    Write-Host 'On Windows it uses powershell.exe + ReactiveBackup.Run-Scheduled.ps1 so pwsh updates do not break the task.'
     Write-Host 'To watch a one-off or continuous backup in this window, run ReactiveBackup.EvaluateAndRun.ps1 instead.'
     Write-Host ''
+}
+
+function Get-WindowsPowerShellExecutablePath {
+    if ($env:WINDIR) {
+        $systemPs = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $systemPs) {
+            return $systemPs
+        }
+    }
+
+    $command = Get-Command powershell.exe -ErrorAction SilentlyContinue
+    if ($command -and $command.Source -and -not (Test-ReactiveBackupAppExecutionAlias -Path $command.Source)) {
+        return $command.Source
+    }
+
+    return $null
+}
+
+function Get-ScheduledLauncherScriptPath {
+    return (Join-Path $PSScriptRoot 'ReactiveBackup.Run-Scheduled.ps1')
+}
+
+function Register-WindowsScheduledBackup {
+    param([int]$RepeatMinutes)
+
+    $launcherPath = Get-ScheduledLauncherScriptPath
+    if (-not (Test-Path -LiteralPath $launcherPath)) {
+        throw "Scheduled launcher not found: $launcherPath"
+    }
+
+    $hostPath = Get-WindowsPowerShellExecutablePath
+    if (-not $hostPath) {
+        throw 'Could not find Windows PowerShell (powershell.exe) to host the scheduled task.'
+    }
+
+    $taskName = 'Reactive Backup'
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+                -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes) `
+                -RepetitionDuration (New-TimeSpan -Days 365)
+    $action = New-ScheduledTaskAction -Execute $hostPath `
+                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
+    Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action `
+                           -Principal $principal -Settings $settings | Out-Null
+    Write-Host "Created scheduled task '$taskName' to run every $RepeatMinutes minutes (hidden)."
+    Write-Host "Host: $hostPath"
+    Write-Host "Launcher resolves pwsh on each run so Store/MSI PowerShell updates do not break the task."
 }
 
 function Edit-WindowsScheduledBackup {
@@ -146,12 +195,25 @@ function Edit-WindowsScheduledBackup {
         Write-Host "Existing scheduled task found: $taskName"
         Write-Host "Task State: $state"
 
-        $choice = Read-Host 'Do you want to start, stop, or delete the task? (start/stop/delete/none)'
+        $choice = Read-Host 'Do you want to start, stop, delete, or recreate the task? (start/stop/delete/recreate/none)'
         switch ($choice.ToLower()) {
-            'start'  { Start-ScheduledTask $taskName; Write-Host 'Task started.' }
-            'stop'   { Stop-ScheduledTask $taskName; Write-Host 'Task stopped.' }
-            'delete' { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false; Write-Host 'Task deleted.' }
-            default  { Write-Host 'No changes made.' }
+            'start' {
+                Start-ScheduledTask $taskName
+                Write-Host 'Task started.'
+            }
+            'stop' {
+                Stop-ScheduledTask $taskName
+                Write-Host 'Task stopped.'
+            }
+            'delete' {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                Write-Host 'Task deleted.'
+            }
+            'recreate' {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                Register-WindowsScheduledBackup -RepeatMinutes $RepeatMinutes
+            }
+            default { Write-Host 'No changes made.' }
         }
         return
     }
@@ -161,17 +223,7 @@ function Edit-WindowsScheduledBackup {
         return
     }
 
-    $scriptPath = Get-EvaluateAndRunScriptPath
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-                -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes) `
-                -RepetitionDuration (New-TimeSpan -Days 365)
-    $action = New-ScheduledTaskAction -Execute $ShellPath `
-                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`" -ScheduledTask"
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
-    Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action `
-                           -Principal $principal -Settings $settings | Out-Null
-    Write-Host "Created scheduled task '$taskName' to run every $RepeatMinutes minutes (hidden)."
+    Register-WindowsScheduledBackup -RepeatMinutes $RepeatMinutes
 }
 
 function Get-UserCrontabText {

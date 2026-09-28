@@ -143,6 +143,7 @@ For settings involving drive letter paths, you may use any of the following synt
 | `excludedRepoSubfolders`             | Array of subfolders to exclude from the backup. (Ignored if `includedRepoSubfolders` is populated). Defaults include `.git`, `node_modules`, `dist`, `.next`, `.venv`, `__pycache__`, `.pytest_cache`, `.aws-sam`, and `logs`. `logs` is included so writing `ReactiveBackup.log` during a check does not look like a source change in this repo. EvaluateAndRun also always skips its own `logs` folder when the ReactiveBackup solution itself is one of the repos being checked. |
 | `includedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to include.                                                                                                                                                                                                                        |
 | `excludedRepoFolders`                | (Used when backupLevel is "repo-parent") Specific repository folder names to exclude.                                                                                                                                                                                                                        |
+| `additionalBackupFolders`            | Array of 0 to n non-code folders to back up alongside your repos. Each entry is an object with:<br>• `source` (required): folder to back up, e.g. `/home/Developer/Documents`<br>• `destination` (optional): where timestamped backups are stored. If omitted, uses `rootBackupDirectory/<name>`.<br>• `name` (optional): label for logs and the default destination subfolder. Defaults to the source folder name.<br>• `excludedSubfolders` (optional): subfolder names to skip inside this source.<br>• `includeRootFiles` (optional): defaults to true.<br>You may also use a plain string entry as shorthand for `{ "source": "..." }`. |
 | `checkForCodeChangesIntervalMinutes` | The time interval (in minutes) at which the solution will check whether it is time to make a backup.<br>> **NOTE**: use the JSON number syntax of `15` and NOT "15". Changing this does **not** change an existing Windows scheduled task or crontab until you run `ReactiveBackup.Create-Edit-Scheduled-Task.ps1` again. |
 | `timestampFormat`                    | Determines the timestamp format of how backup folders will be named. For example, `yyyyMMdd - hh:mm tt` would yield a backup folder named `20251223 03.14 PM`                                                                                                                                                |
 | `logLevel`                           | Controls logging verbosity. Options are "info" or "error".                                                                                                                                                                                                                                                   |
@@ -159,10 +160,26 @@ For settings involving drive letter paths, you may use any of the following synt
 
 # Backup Output Structure
 
-When a backup runs, it creates a folder in your `rootBackupDirectory` named with the timestamp (and optional description). Inside that folder:
+When a backup runs, it creates a folder named with the timestamp (and optional description). Inside that folder:
 
 - `code`: Contains the backed-up source files.
 - `backup data`: Contains metadata and logs specific to that backup operation.
+
+For repositories in `repo-parent` mode, that timestamp folder lives under `rootBackupDirectory\<repoName>\`. For each `additionalBackupFolders` entry, timestamp folders live under that entry's `destination` (or under `rootBackupDirectory\<name>\` when `destination` is omitted).
+
+### Example: documents folder on Linux
+
+```json
+"additionalBackupFolders": [
+  {
+    "name": "Documents",
+    "source": "/home/Developer/Documents",
+    "destination": "/media/Developer/DEVELOPER/Documents_BACKUPS"
+  }
+]
+```
+
+Omit `destination` to store under `rootBackupDirectory/Documents` next to your repo backups.
 
 # Logging
 
@@ -319,13 +336,13 @@ pwsh ./ReactiveBackup.Create-Edit-Scheduled-Task.ps1
 
 | Platform | Mechanism |
 | -------- | --------- |
-| Windows | Task Scheduler task named `Reactive Backup` |
+| Windows | Task Scheduler task named `Reactive Backup`. The task runs stable `powershell.exe`, which launches `ReactiveBackup.Run-Scheduled.ps1`. That launcher resolves the current `pwsh.exe` (MSI or Store package) on every run so PowerShell updates do not break the task. |
 | Linux / macOS | user crontab entry |
 
 Follow the prompts:
 
 - If no schedule exists, you will be asked whether to create it.
-- If a Windows task already exists, you can **start**, **stop**, or **delete** it.
+- If a Windows task already exists, you can **start**, **stop**, **delete**, or **recreate** it.
 - If a cron entry already exists, you can **update** or **delete** it.
 
 On Windows, creating the scheduled task may require an elevated PowerShell session. On Linux/macOS, if `cron` is not installed, the script warns you and waits for a keypress instead of creating a schedule.

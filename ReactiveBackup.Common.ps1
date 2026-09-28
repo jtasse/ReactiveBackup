@@ -209,23 +209,78 @@ function Complete-ReactiveBackupScript {
     exit $Code
 }
 
+function Test-ReactiveBackupAppExecutionAlias {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force
+        # Windows App Execution Aliases are 0-byte reparse points under WindowsApps.
+        if ($item.Length -eq 0) {
+            return $true
+        }
+    }
+    catch {
+        return $false
+    }
+
+    return $false
+}
+
 function Get-PwshExecutablePath {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    foreach ($relative in @('PowerShell\7\pwsh.exe', 'PowerShell\7-preview\pwsh.exe')) {
+        if ($env:ProgramFiles) {
+            $candidates.Add((Join-Path $env:ProgramFiles $relative))
+        }
+        $programFilesX86 = ${env:ProgramFiles(x86)}
+        if ($programFilesX86) {
+            $candidates.Add((Join-Path $programFilesX86 $relative))
+        }
+    }
+
+    try {
+        $packages = @(Get-AppxPackage -Name 'Microsoft.PowerShell' -ErrorAction SilentlyContinue)
+        foreach ($pkg in ($packages | Sort-Object { [version]$_.Version } -Descending)) {
+            if ($pkg.InstallLocation) {
+                $candidates.Add((Join-Path $pkg.InstallLocation 'pwsh.exe'))
+            }
+        }
+    }
+    catch {
+    }
+
     $command = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($command -and $command.Source) {
-        return $command.Source
+        $candidates.Add([string]$command.Source)
     }
 
-    $bundled = Join-Path $PSHOME 'pwsh'
-    if (Test-Path -LiteralPath $bundled) {
-        return $bundled
+    if ($PSHOME) {
+        $candidates.Add((Join-Path $PSHOME 'pwsh.exe'))
+        $candidates.Add((Join-Path $PSHOME 'pwsh'))
     }
 
-    $bundledExe = Join-Path $PSHOME 'pwsh.exe'
-    if (Test-Path -LiteralPath $bundledExe) {
-        return $bundledExe
+    $aliasFallback = $null
+    foreach ($path in @($candidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+            continue
+        }
+
+        if (Test-ReactiveBackupAppExecutionAlias -Path $path) {
+            if (-not $aliasFallback) {
+                $aliasFallback = $path
+            }
+            continue
+        }
+
+        return $path
     }
 
-    return $null
+    return $aliasFallback
 }
 
 function Get-PowerShellHostPath {
@@ -537,6 +592,141 @@ function Get-ReactiveBackupConfigStringArray {
     return @($Config.$Name | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
+function Get-ReactiveBackupAdditionalFolders {
+    param(
+        $Config,
+        [string]$SolutionRoot = '',
+        [string]$DefaultBackupRoot = ''
+    )
+
+    if (-not $Config -or -not ($Config.PSObject.Properties.Name -contains 'additionalBackupFolders') -or $null -eq $Config.additionalBackupFolders) {
+        return @()
+    }
+
+    $basePath = $SolutionRoot
+    if ([string]::IsNullOrWhiteSpace($basePath)) {
+        $basePath = $script:ReactiveBackupCommonDirectory
+    }
+    if ([string]::IsNullOrWhiteSpace($basePath)) {
+        $basePath = (Get-Location).ProviderPath
+    }
+
+    $defaultDestRoot = $DefaultBackupRoot
+    if ([string]::IsNullOrWhiteSpace($defaultDestRoot)) {
+        $defaultDestRoot = Get-ReactiveBackupConfigString -Config $Config -Name 'rootBackupDirectory'
+        if ($defaultDestRoot) {
+            $defaultDestRoot = Resolve-ReactiveBackupPath -Path $defaultDestRoot -BasePath $basePath
+        }
+    }
+
+    $results = @()
+    $index = 0
+    foreach ($entry in @($Config.additionalBackupFolders)) {
+        $index++
+        if ($null -eq $entry) {
+            continue
+        }
+
+        $sourceRaw = ''
+        $destRaw = ''
+        $nameRaw = ''
+        $excluded = @()
+        $includeRoot = $true
+
+        if ($entry -is [string]) {
+            $sourceRaw = ([string]$entry).Trim()
+        }
+        else {
+            if ($entry.PSObject.Properties.Name -contains 'source') {
+                $sourceRaw = ([string]$entry.source).Trim()
+            }
+            elseif ($entry.PSObject.Properties.Name -contains 'path') {
+                $sourceRaw = ([string]$entry.path).Trim()
+            }
+
+            if ($entry.PSObject.Properties.Name -contains 'destination') {
+                $destRaw = ([string]$entry.destination).Trim()
+            }
+            elseif ($entry.PSObject.Properties.Name -contains 'destinationDirectory') {
+                $destRaw = ([string]$entry.destinationDirectory).Trim()
+            }
+
+            if ($entry.PSObject.Properties.Name -contains 'name') {
+                $nameRaw = ([string]$entry.name).Trim()
+            }
+
+            if ($entry.PSObject.Properties.Name -contains 'excludedSubfolders') {
+                $excluded = @($entry.excludedSubfolders | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+
+            if ($entry.PSObject.Properties.Name -contains 'includeRootFiles' -and $null -ne $entry.includeRootFiles) {
+                $includeRoot = [bool]$entry.includeRootFiles
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($sourceRaw)) {
+            throw "additionalBackupFolders[$index] is missing required 'source'."
+        }
+
+        $source = Resolve-ReactiveBackupPath -Path $sourceRaw -BasePath $basePath
+        $name = $nameRaw
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            $name = Split-Path -Path $source.TrimEnd('\', '/') -Leaf
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            throw "additionalBackupFolders[$index] could not determine a backup name for source '$sourceRaw'."
+        }
+
+        $destination = $null
+        if (-not [string]::IsNullOrWhiteSpace($destRaw)) {
+            $destination = Resolve-ReactiveBackupPath -Path $destRaw -BasePath $basePath
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($defaultDestRoot)) {
+            $destination = Join-Path $defaultDestRoot $name
+        }
+        else {
+            throw "additionalBackupFolders[$index] ('$name') has no destination and rootBackupDirectory is not set."
+        }
+
+        $results += [pscustomobject]@{
+            Name               = $name
+            Source             = $source
+            Destination        = $destination
+            ExcludedSubfolders = @($excluded)
+            IncludeRootFiles   = $includeRoot
+        }
+    }
+
+    return @($results)
+}
+
+function Test-ReactiveBackupPathIsUnder {
+    param(
+        [string]$Path,
+        [string]$Parent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Parent)) {
+        return $false
+    }
+
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $parentFull = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\', '/')
+    $comparison = if (Test-IsUnixPlatform) {
+        [System.StringComparison]::Ordinal
+    }
+    else {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+
+    if ($full.Equals($parentFull, $comparison)) {
+        return $true
+    }
+
+    $prefix = $parentFull + [System.IO.Path]::DirectorySeparatorChar
+    return $full.StartsWith($prefix, $comparison)
+}
+
 function Get-ReactiveBackupConfigBool {
     param($Config, [string]$Name, [bool]$Default = $false)
 
@@ -779,25 +969,38 @@ function Get-ReactiveBackupConfiguredBackupFolderNames {
     }
 
     if ($backupLevel -ne 'repo-parent') {
-        if ([string]::IsNullOrWhiteSpace($codeRoot)) {
-            return @()
+        $names = @()
+        if (-not [string]::IsNullOrWhiteSpace($codeRoot)) {
+            $names += @(Split-Path -Path $codeRoot -Leaf)
         }
-        return @(Split-Path -Path $codeRoot -Leaf)
+    }
+    elseif ($included.Count -gt 0) {
+        $names = @($included)
+    }
+    else {
+        $names = @()
+        if ($codeRoot -and (Test-Path -LiteralPath $codeRoot)) {
+            $backupLeaf = ''
+            if ($backupRoot) {
+                $backupLeaf = Split-Path -Path $backupRoot -Leaf
+            }
+            $names = @(Get-ChildItem -LiteralPath $codeRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $excluded -notcontains $_.Name -and $_.Name -ne $backupLeaf } |
+                ForEach-Object { $_.Name })
+        }
     }
 
-    if ($included.Count -gt 0) {
-        return @($included)
-    }
-
-    $names = @()
-    if ($codeRoot -and (Test-Path -LiteralPath $codeRoot)) {
-        $backupLeaf = ''
-        if ($backupRoot) {
-            $backupLeaf = Split-Path -Path $backupRoot -Leaf
+    $additional = @(Get-ReactiveBackupAdditionalFolders -Config $Config -SolutionRoot $SolutionRoot -DefaultBackupRoot $backupRoot)
+    foreach ($folder in $additional) {
+        if (-not $backupRoot) {
+            continue
         }
-        $names = @(Get-ChildItem -LiteralPath $codeRoot -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $excluded -notcontains $_.Name -and $_.Name -ne $backupLeaf } |
-            ForEach-Object { $_.Name })
+        if (Test-ReactiveBackupPathIsUnder -Path $folder.Destination -Parent $backupRoot) {
+            $leaf = Split-Path -Path $folder.Destination.TrimEnd('\', '/') -Leaf
+            if ($leaf -and ($names -notcontains $leaf)) {
+                $names += $leaf
+            }
+        }
     }
 
     return @($names)
@@ -1182,10 +1385,46 @@ function Invoke-ReactiveBackupThresholdAlerts {
     $configuredDirs = @($allDirs | Where-Object { $configuredLookup.ContainsKey($_.Name.ToLowerInvariant()) })
     $otherDirs = @($allDirs | Where-Object { -not $configuredLookup.ContainsKey($_.Name.ToLowerInvariant()) })
 
+    $additionalFolders = @(Get-ReactiveBackupAdditionalFolders -Config $Config -SolutionRoot $SolutionRoot -DefaultBackupRoot $BackupRoot)
+    $externalConfiguredDirs = @()
+    $backupRootFull = [System.IO.Path]::GetFullPath($BackupRoot).TrimEnd('\', '/')
+    foreach ($folder in $additionalFolders) {
+        if (-not (Test-Path -LiteralPath $folder.Destination)) {
+            continue
+        }
+        $destFull = [System.IO.Path]::GetFullPath($folder.Destination).TrimEnd('\', '/')
+        $comparison = if (Test-IsUnixPlatform) {
+            [System.StringComparison]::Ordinal
+        }
+        else {
+            [System.StringComparison]::OrdinalIgnoreCase
+        }
+
+        if ($destFull.Equals($backupRootFull, $comparison)) {
+            continue
+        }
+
+        if (Test-ReactiveBackupPathIsUnder -Path $destFull -Parent $BackupRoot) {
+            $leaf = Split-Path -Path $destFull -Leaf
+            $parent = Split-Path -Parent $destFull
+            $parentFull = if ($parent) { [System.IO.Path]::GetFullPath($parent).TrimEnd('\', '/') } else { '' }
+            if ($leaf -and $parentFull.Equals($backupRootFull, $comparison) -and -not $configuredLookup.ContainsKey($leaf.ToLowerInvariant())) {
+                $configuredDirs += (Get-Item -LiteralPath $destFull)
+                $configuredLookup[$leaf.ToLowerInvariant()] = $true
+            }
+            continue
+        }
+
+        $externalConfiguredDirs += [pscustomobject]@{
+            Name     = $folder.Name
+            FullName = $destFull
+        }
+    }
+
     $measuredByName = @{}
     $cacheEntries = @()
 
-    $configuredCount = @($configuredDirs).Count
+    $configuredCount = @($configuredDirs).Count + @($externalConfiguredDirs).Count
     $leftoverCount = @($otherDirs).Count
     $dirCount = $configuredCount
     if ($scanLeftovers) {
@@ -1203,6 +1442,33 @@ function Invoke-ReactiveBackupThresholdAlerts {
         $folderStarted = [datetime]::UtcNow
         Write-Host ("  [{0}/{1}] Configured: {2}" -f $dirIndex, $dirCount, $dir.Name) -ForegroundColor Gray
         $measured = Get-ReactiveBackupFolderSizeCached -Dir $dir -SizeCache $sizeCache
+        if (-not $measured.FromCache) {
+            Write-Host ""
+        }
+        $elapsed = Get-ReactiveBackupElapsedText -StartedUtc $folderStarted
+        $cacheNote = if ($measured.FromCache) { ' (cached)' } else { '' }
+        Write-Host ("  [{0}/{1}] Configured: {2} - {3}{4} [{5}]" -f $dirIndex, $dirCount, $dir.Name, (Format-ReactiveBackupByteSize -Bytes $measured.bytes), $cacheNote, $elapsed)
+        $measuredByName[$dir.Name] = $measured
+        $cacheEntries += [pscustomobject]@{
+            Name      = $measured.Name
+            signature = $measured.signature
+            bytes     = $measured.bytes
+        }
+    }
+    foreach ($dir in $externalConfiguredDirs) {
+        $dirIndex++
+        $folderStarted = [datetime]::UtcNow
+        Write-Host ("  [{0}/{1}] Configured: {2}" -f $dirIndex, $dirCount, $dir.Name) -ForegroundColor Gray
+        $dirInfo = Get-Item -LiteralPath $dir.FullName
+        $measured = Get-ReactiveBackupFolderSizeCached -Dir $dirInfo -SizeCache $sizeCache
+        # Keep the configured additional-folder name in alerts/cache even if the leaf differs.
+        $measured = [pscustomobject]@{
+            Name      = $dir.Name
+            Path      = $dir.FullName
+            signature = $measured.signature
+            bytes     = $measured.bytes
+            FromCache = $measured.FromCache
+        }
         if (-not $measured.FromCache) {
             Write-Host ""
         }
@@ -1257,6 +1523,16 @@ function Invoke-ReactiveBackupThresholdAlerts {
     $exceeding = @()
     if ($thresholdMb -gt 0) {
         foreach ($dir in $configuredDirs) {
+            $measured = $measuredByName[$dir.Name]
+            if ($measured -and $measured.bytes -ge $thresholdBytes) {
+                $exceeding += [pscustomobject]@{
+                    Name      = $dir.Name
+                    Path      = $dir.FullName
+                    SizeBytes = $measured.bytes
+                }
+            }
+        }
+        foreach ($dir in $externalConfiguredDirs) {
             $measured = $measuredByName[$dir.Name]
             if ($measured -and $measured.bytes -ge $thresholdBytes) {
                 $exceeding += [pscustomobject]@{

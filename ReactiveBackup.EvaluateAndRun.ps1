@@ -348,7 +348,7 @@ function Invoke-BackupCycle {
     }
 
     if (-not $reposToCheck -or @($reposToCheck).Count -eq 0) {
-        Write-Log "No repositories found to check under $rootCodeDirectory" -Level Error
+        Write-Log "No repositories found to check under $rootCodeDirectory"
         Write-Host "No repositories found to check under $rootCodeDirectory" -ForegroundColor Yellow
         Write-Host ""
     }
@@ -356,6 +356,14 @@ function Invoke-BackupCycle {
         $repoNames = @($reposToCheck | ForEach-Object { $_.Name })
         Write-Log "Using $configSource (backupLevel=$backupLevel). Repositories: $($repoNames -join ', ')"
         Write-Host "Using $configSource. Repositories: $($repoNames -join ', ')" -ForegroundColor Gray
+        Write-Host ""
+    }
+
+    $additionalFolders = @(Get-ReactiveBackupAdditionalFolders -Config $config -SolutionRoot $PSScriptRoot -DefaultBackupRoot $rootBackupDirectory)
+    if (@($additionalFolders).Count -gt 0) {
+        $additionalNames = @($additionalFolders | ForEach-Object { $_.Name })
+        Write-Log "Additional folders: $($additionalNames -join ', ')"
+        Write-Host "Additional folders: $($additionalNames -join ', ')" -ForegroundColor Gray
         Write-Host ""
     }
 
@@ -460,6 +468,112 @@ function Invoke-BackupCycle {
                 Write-Log "  $repoName backup failed." -Level Error
             }
         }
+        }
+        finally {
+            Write-Host ""
+        }
+    }
+
+    foreach ($folder in $additionalFolders) {
+        try {
+            $folderName = $folder.Name
+            $folderPath = $folder.Source
+            $folderBackupPath = $folder.Destination
+            $folderExclusions = @($folder.ExcludedSubfolders)
+            $folderIncludeRoot = [bool]$folder.IncludeRootFiles
+
+            Write-Log "Processing additional folder: $folderName ($folderPath -> $folderBackupPath)"
+
+            if (-not (Test-Path -LiteralPath $folderPath)) {
+                Write-Log "  Additional folder source not found: $folderPath" -Level Error
+                Write-Host "Additional folder source not found: $folderPath" -ForegroundColor Red
+                continue
+            }
+
+            Assert-ReactiveBackupWritable -Path $folderBackupPath -Purpose "additional backup destination for $folderName"
+
+            if (-not (Test-Path -LiteralPath $folderBackupPath)) {
+                New-Item -ItemType Directory -Path $folderBackupPath -Force | Out-Null
+            }
+
+            Write-Log "Checking additional folder: $folderName"
+            Write-Host "Checking folder: " -NoNewline
+            Write-Host $folderName -ForegroundColor Cyan -NoNewline
+            Write-Host "... " -NoNewline
+
+            $lastBackupDirectory = Get-LastBackupDirectory -BackupRoot $folderBackupPath
+            $lastBackupTime = if ($lastBackupDirectory) { $lastBackupDirectory.CreationTimeUtc } else { $null }
+
+            try {
+                $trackedFiles = Get-TrackedFiles -Root $folderPath -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $folderExclusions -IncludeRootFiles $folderIncludeRoot
+                Write-Host ""
+            }
+            catch {
+                Write-Host ""
+                Write-Log "  Error scanning additional folder $folderName : $($_.Exception.Message)" -Level Error
+                Write-Host "Error scanning folder $folderName : $($_.Exception.Message)" -ForegroundColor Red
+                continue
+            }
+
+            $shouldBackup = $false
+
+            if (-not $trackedFiles) {
+                if ($lastBackupDirectory) {
+                    Write-Log "  Folder has no tracked files and a prior backup exists. Deletion detected. Backup required."
+                    Write-Host "Folder has no tracked files; deletion detected. Backup required." -ForegroundColor Yellow
+                    $shouldBackup = $true
+                }
+                else {
+                    Write-Log "  No tracked files found in $folderName and no prior backup exists."
+                    Write-Host "No tracked files found in $folderName." -ForegroundColor Gray
+                }
+            }
+            else {
+                $latestFileChange = ($trackedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+
+                if (-not $lastBackupTime) {
+                    Write-Log "  No prior backup found. Backup required."
+                    $shouldBackup = $true
+                }
+                elseif ($latestFileChange -gt $lastBackupTime) {
+                    Write-Log "  Changes detected (Last backup: $lastBackupTime, Last change: $latestFileChange). Backup required."
+                    $shouldBackup = $true
+                }
+            }
+
+            if (-not $shouldBackup -and $lastBackupDirectory) {
+                $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
+                $inventoryChanged = Get-InventoryChange -RepoPath $folderPath -BackupRoot $backupCodePath -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $folderExclusions -IncludeRootFiles $folderIncludeRoot
+                if ($inventoryChanged) {
+                    Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
+                    Write-Host "Inventory changed (created or deleted file). Backup required." -ForegroundColor Yellow
+                    $shouldBackup = $true
+                }
+            }
+
+            if (-not $shouldBackup) {
+                Write-Log "  No changes detected."
+                Write-Host "No changes detected." -ForegroundColor Gray
+            }
+
+            if ($shouldBackup) {
+                Write-Host "Running backup for $folderName..." -ForegroundColor Cyan
+                & (Join-Path $PSScriptRoot 'ReactiveBackup.ps1') -SourceDirectory $folderPath -DestinationDirectory $folderBackupPath -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $folderExclusions -IncludeRootFiles $folderIncludeRoot -TimestampFormat $timestampFormat -LogLevel $logLevel | Out-Null
+                $backupExitCode = $LASTEXITCODE
+                if ($null -eq $backupExitCode) {
+                    $backupExitCode = if ($?) { 0 } else { 1 }
+                }
+                if ($backupExitCode -eq 0) {
+                    Write-Log "  $folderName backup successful."
+                }
+                else {
+                    Write-Log "  $folderName backup failed." -Level Error
+                }
+            }
+        }
+        catch {
+            Write-Log "  Error processing additional folder: $($_.Exception.Message)" -Level Error
+            Write-Host "Error processing additional folder: $($_.Exception.Message)" -ForegroundColor Red
         }
         finally {
             Write-Host ""

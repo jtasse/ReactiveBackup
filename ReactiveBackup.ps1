@@ -161,6 +161,7 @@ try {
     # -------------------------------
     # Handle 'repo-parent' mode (Batch Mode)
     # -------------------------------
+    $processAdditionalFolders = -not $PSBoundParameters.ContainsKey('SourceDirectory')
     if (-not $SourceDirectory -and $config.backupLevel -eq 'repo-parent') {
         Write-Host "Running in 'repo-parent' mode. Checking repositories..." -ForegroundColor Cyan
         Write-Host ""
@@ -224,6 +225,25 @@ try {
             & $PSCommandPath -SourceDirectory $repo.FullName -DestinationDirectory $repoDest -IncludedRepoSubfolders $inclSub -ExcludedRepoSubfolders $exclSub -IncludeRootFiles $incRoot -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
             if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
             Write-Host ""
+        }
+
+        if (-not $SpecifiedRepositories) {
+            $additionalFolders = @(Get-ReactiveBackupAdditionalFolders -Config $config -SolutionRoot $PSScriptRoot -DefaultBackupRoot $rootDest)
+            foreach ($folder in $additionalFolders) {
+                Write-Host "Backing up folder: " -NoNewline
+                Write-Host $folder.Name -ForegroundColor Cyan
+                if (-not (Test-Path -LiteralPath $folder.Source)) {
+                    Write-Host "Warning: additional folder source not found: $($folder.Source)" -ForegroundColor Yellow
+                    $anyFailure = $true
+                    Write-Host ""
+                    continue
+                }
+
+                Assert-ReactiveBackupWritable -Path $folder.Destination -Purpose "additional backup destination for $($folder.Name)"
+                & $PSCommandPath -SourceDirectory $folder.Source -DestinationDirectory $folder.Destination -IncludedRepoSubfolders @() -ExcludedRepoSubfolders @($folder.ExcludedSubfolders) -IncludeRootFiles ([bool]$folder.IncludeRootFiles) -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
+                if ($LASTEXITCODE -ne 0) { $anyFailure = $true }
+                Write-Host ""
+            }
         }
 
         $backupSucceeded = (-not $anyFailure)
@@ -452,6 +472,26 @@ try {
     } else {
         Write-BackupLog "Backup completed with errors (see above)." -Level Error
         # We leave $backupSucceeded as false so the script exits with 1 to indicate partial failure
+    }
+
+    if ($processAdditionalFolders) {
+        $additionalFolders = @(Get-ReactiveBackupAdditionalFolders -Config $config -SolutionRoot $PSScriptRoot)
+        $fmt = $TimestampFormat
+        if (-not $fmt) { $fmt = $config.timestampFormat }
+        foreach ($folder in $additionalFolders) {
+            Write-Host ""
+            Write-Host "Backing up folder: " -NoNewline
+            Write-Host $folder.Name -ForegroundColor Cyan
+            if (-not (Test-Path -LiteralPath $folder.Source)) {
+                Write-Host "Warning: additional folder source not found: $($folder.Source)" -ForegroundColor Yellow
+                $backupSucceeded = $false
+                continue
+            }
+
+            Assert-ReactiveBackupWritable -Path $folder.Destination -Purpose "additional backup destination for $($folder.Name)"
+            & $PSCommandPath -SourceDirectory $folder.Source -DestinationDirectory $folder.Destination -IncludedRepoSubfolders @() -ExcludedRepoSubfolders @($folder.ExcludedSubfolders) -IncludeRootFiles ([bool]$folder.IncludeRootFiles) -TimestampFormat $fmt -LogLevel $LogLevel -Message $Message
+            if ($LASTEXITCODE -ne 0) { $backupSucceeded = $false }
+        }
     }
 }
 catch {

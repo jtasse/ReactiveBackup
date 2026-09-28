@@ -104,6 +104,51 @@ $repoModeNames = @(Get-ReactiveBackupConfiguredBackupFolderNames -Config ([pscus
 }))
 Assert-Equal $repoModeNames[0] 'jtt' 'repo mode uses the source folder name'
 
+$tempDocs = Join-Path ([System.IO.Path]::GetTempPath()) ('ReactiveBackup-docs-' + [guid]::NewGuid().ToString('N'))
+$tempDocsBackup = Join-Path ([System.IO.Path]::GetTempPath()) ('ReactiveBackup-docs-backup-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tempDocs -Force | Out-Null
+try {
+    $additionalResolved = @(Get-ReactiveBackupAdditionalFolders -Config ([pscustomobject]@{
+        rootBackupDirectory = 'C:\dev\github\_BACKUPS'
+        additionalBackupFolders = @(
+            [pscustomobject]@{
+                name = 'Documents'
+                source = $tempDocs
+                destination = $tempDocsBackup
+            },
+            [pscustomobject]@{
+                source = $tempDocs
+            }
+        )
+    }) -SolutionRoot $PSScriptRoot -DefaultBackupRoot 'C:\dev\github\_BACKUPS')
+
+    Assert-equal $additionalResolved.Count 2 'parses two additional folders'
+    Assert-equal $additionalResolved[0].Name 'Documents' 'uses configured name'
+    Assert-equal $additionalResolved[0].Destination $tempDocsBackup 'uses configured destination'
+    Assert-True ($additionalResolved[1].Destination -match '[\\/]_BACKUPS[\\/]') 'omitted destination falls back under rootBackupDirectory'
+    Assert-equal $additionalResolved[1].Name (Split-Path $tempDocs -Leaf) 'omitted name uses source leaf'
+
+    $withAdditionalNames = @(Get-ReactiveBackupConfiguredBackupFolderNames -Config ([pscustomobject]@{
+        backupLevel = 'repo-parent'
+        includedRepoFolders = @('jtt')
+        excludedRepoFolders = @()
+        rootCodeDirectory = 'C:\dev\github'
+        rootBackupDirectory = 'C:\dev\github\_BACKUPS'
+        additionalBackupFolders = @(
+            [pscustomobject]@{
+                name = 'Documents'
+                source = $tempDocs
+            }
+        )
+    }) -SolutionRoot $PSScriptRoot)
+    Assert-True ($withAdditionalNames -contains 'jtt') 'keeps repo names'
+    Assert-True ($withAdditionalNames -contains 'Documents') 'includes additional folder under rootBackupDirectory'
+}
+finally {
+    Remove-Item -Path $tempDocs -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $tempDocsBackup -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $smtpBlank = [pscustomobject]@{
     smtpHost = ''
     smtpUsername = ''
