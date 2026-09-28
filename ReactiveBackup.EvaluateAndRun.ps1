@@ -441,7 +441,7 @@ function Invoke-BackupCycle {
         }
 
         if (-not $shouldBackup -and $lastBackupDirectory) {
-            $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
+            $backupCodePath = Get-ReactiveBackupContentPath -BackupDirectory $lastBackupDirectory.FullName -PreferLegacyIfPresent
             $inventoryChanged = Get-InventoryChange -RepoPath $repoPath -BackupRoot $backupCodePath -IncludedRepoSubfolders $includedRepoSubfolders -ExcludedRepoSubfolders $repoExclusions -IncludeRootFiles $includeRootFiles
             if ($inventoryChanged) {
                 Write-Log "  Inventory comparison shows a created or deleted file. Backup required."
@@ -542,7 +542,7 @@ function Invoke-BackupCycle {
             }
 
             if (-not $shouldBackup -and $lastBackupDirectory) {
-                $backupCodePath = Join-Path $lastBackupDirectory.FullName 'code'
+                $backupCodePath = Get-ReactiveBackupContentPath -BackupDirectory $lastBackupDirectory.FullName -PreferLegacyIfPresent
                 $inventoryChanged = Get-InventoryChange -RepoPath $folderPath -BackupRoot $backupCodePath -IncludedRepoSubfolders @() -ExcludedRepoSubfolders $folderExclusions -IncludeRootFiles $folderIncludeRoot
                 if ($inventoryChanged) {
                     Write-Log "  Inventory comparison shows a created or deleted file. Backup required."

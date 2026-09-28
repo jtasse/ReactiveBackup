@@ -537,10 +537,58 @@ function Copy-ReactiveBackupFile {
     [System.IO.File]::Copy($Source, $Destination, $true)
 }
 
+function Get-ReactiveBackupContentFolderName {
+    return 'backed_up_files'
+}
+
+function Get-ReactiveBackupMetadataFolderName {
+    return 'backup_metadata'
+}
+
+function Get-ReactiveBackupContentPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BackupDirectory,
+        [switch]$PreferLegacyIfPresent
+    )
+
+    $modern = Join-Path $BackupDirectory (Get-ReactiveBackupContentFolderName)
+    if (-not $PreferLegacyIfPresent) {
+        return $modern
+    }
+
+    if (Test-Path -LiteralPath $modern) {
+        return $modern
+    }
+
+    $legacy = Join-Path $BackupDirectory 'code'
+    if (Test-Path -LiteralPath $legacy) {
+        return $legacy
+    }
+
+    return $modern
+}
+
 function Get-ReactiveBackupInventoryPath {
     param([string]$BackupDirectory)
 
-    return (Join-Path (Join-Path $BackupDirectory 'backup data') 'source-inventory.txt')
+    return (Join-Path (Join-Path $BackupDirectory (Get-ReactiveBackupMetadataFolderName)) 'source-inventory.txt')
+}
+
+function Resolve-ReactiveBackupInventoryPath {
+    param([string]$BackupDirectory)
+
+    $modern = Get-ReactiveBackupInventoryPath -BackupDirectory $BackupDirectory
+    if (Test-Path -LiteralPath $modern) {
+        return $modern
+    }
+
+    $legacy = Join-Path (Join-Path $BackupDirectory 'backup data') 'source-inventory.txt'
+    if (Test-Path -LiteralPath $legacy) {
+        return $legacy
+    }
+
+    return $modern
 }
 
 function Write-ReactiveBackupInventory {
@@ -563,7 +611,7 @@ function Write-ReactiveBackupInventory {
 function Read-ReactiveBackupInventory {
     param([string]$BackupDirectory)
 
-    $path = Get-ReactiveBackupInventoryPath -BackupDirectory $BackupDirectory
+    $path = Resolve-ReactiveBackupInventoryPath -BackupDirectory $BackupDirectory
     if (-not (Test-Path -LiteralPath $path)) {
         return $null
     }

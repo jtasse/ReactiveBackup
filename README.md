@@ -162,8 +162,8 @@ For settings involving drive letter paths, you may use any of the following synt
 
 When a backup runs, it creates a folder named with the timestamp (and optional description). Inside that folder:
 
-- `code`: Contains the backed-up source files.
-- `backup data`: Contains metadata and logs specific to that backup operation.
+- `backed_up_files`: Contains the backed-up source files.
+- `backup_metadata`: Contains metadata and logs specific to that backup operation.
 
 For repositories in `repo-parent` mode, that timestamp folder lives under `rootBackupDirectory\<repoName>\`. For each `additionalBackupFolders` entry, timestamp folders live under that entry's `destination` (or under `rootBackupDirectory\<name>\` when `destination` is omitted).
 

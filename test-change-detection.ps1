@@ -153,7 +153,7 @@ try {
     $after = Get-BackupCount
     Assert-True ($after -gt $before) 'creating a file whose path contains [brackets] should trigger backup'
     $latestWithBrackets = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1
-    $copiedBracket = Join-Path $latestWithBrackets.FullName 'code\src\[id]\page.tsx'
+    $copiedBracket = [System.IO.Path]::Combine($latestWithBrackets.FullName, 'backed_up_files', 'src', '[id]', 'page.tsx')
     Assert-True ([System.IO.File]::Exists($copiedBracket)) 'backup should contain the file with [brackets] in its path'
     $before = Get-BackupCount
     Invoke-RepoEvaluation
@@ -192,7 +192,7 @@ try {
 
     # .git and node_modules are not copied into backups
     $latestBackup = Get-ChildItem -Path $repoBackupRoot -Directory | Sort-Object CreationTimeUtc -Descending | Select-Object -First 1
-    $copiedCodePath = Join-Path $latestBackup.FullName 'code'
+    $copiedCodePath = Join-Path $latestBackup.FullName 'backed_up_files'
     Assert-True (-not (Test-Path (Join-Path $copiedCodePath '.git'))) 'backup should omit .git'
     Assert-True (-not (Test-Path (Join-Path $copiedCodePath 'node_modules'))) 'backup should omit node_modules'
     Assert-True (Test-Path (Join-Path $copiedCodePath '.github\workflows\ci.yml')) '.github should still be backed up'

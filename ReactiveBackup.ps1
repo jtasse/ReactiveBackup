@@ -310,8 +310,8 @@ try {
     # -------------------------------
     # Create backup subfolders
     # -------------------------------
-    $codeBackupPath = Join-Path $backupRoot 'code'
-    $dataBackupPath = Join-Path $backupRoot 'backup data'
+    $codeBackupPath = Join-Path $backupRoot (Get-ReactiveBackupContentFolderName)
+    $dataBackupPath = Join-Path $backupRoot (Get-ReactiveBackupMetadataFolderName)
 
     New-Item -ItemType Directory -Path $codeBackupPath -Force | Out-Null
     New-Item -ItemType Directory -Path $dataBackupPath -Force | Out-Null
